@@ -33,11 +33,11 @@ OpenLoop is built on three core pillars: **Agent Definitions**, **Externalized S
 ### 1. Agent Definitions (`agents/*.md`)
 Agents are defined as simple Markdown files with YAML frontmatter. This keeps the system prompt human-readable while providing the orchestrator with necessary metadata.
 
-```markdown
+ ```markdown
 ---
-name: vera_auditor
+name: vera
 role: auditor
-expected_output_format: json_block
+expected_output_format: xml_tag
 ---
 
 # Role
@@ -70,11 +70,12 @@ The orchestrator holds the "Single Source of Truth" in a Python `dataclass`.
 ### 3. Execution Flow
 A workflow in OpenLoop consists of three distinct phases:
 
-1. **Preparation Phase (Optional):** Runs exactly once at the very beginning. Useful for scaffolding, gathering context, or setting up the initial state.
+1. **Preparation Phase (Optional):** Runs once at the very beginning. Supports one or multiple agents executed in sequence. Useful for scaffolding, gathering context, or setting up the initial state.
 2. **Loop Phase:** Iterates through a defined sequence of agents. 
+   - Supports any number of agents in the loop sequence.
    - Checks `max_loops` to prevent infinite execution.
-   - Evaluates the `end_state_condition` (e.g., `state.is_complete == True`) after each agent.
-3. **Finalization Phase (Optional):** Runs exactly once at the end. You can configure whether it runs only on successful completion, or also if the loop was aborted due to hitting `max_loops`.
+   - Evaluates the `end_state_condition` (e.g., `is_complete == True` or `payload.get('coverage', 0) >= 80`) after each agent.
+3. **Finalization Phase (Optional):** Runs once at the end. Supports one or multiple agents executed in sequence. You can configure whether it runs only on successful completion (`finalize_on_abort: false`), or also if the loop was aborted due to hitting `max_loops` (`finalize_on_abort: true`).
 
 ---
 
@@ -87,10 +88,24 @@ OpenLoop uses a simple `config.json` in the root directory to define global sett
   "agents_dir": "./agents",
   "workflows_dir": "./workflows",
   "opencode_binary": "opencode",
-  "default_max_loops": 10
+  "default_max_loops": 10,
+  "workdir": "/path/to/project",
+  "init_script": "conda activate myenv"
 }
 ```
+
+| Field | Default | Description |
+|---|---|---|
+| `agents_dir` | `"./agents"` | Directory containing agent `.md` files |
+| `workflows_dir` | `"./workflows"` | Directory containing workflow `.json` files |
+| `opencode_binary` | `"opencode"` | Path or name of the opencode binary |
+| `default_max_loops` | `10` | Maximum loop iterations |
+| `workdir` | `None` | Working directory for the opencode subprocess |
+| `init_script` | `None` | Script or command to run before each opencode invocation (e.g., to activate a conda environment) |
+
 *If `config.json` is missing, OpenLoop falls back to the default values shown above.*
+
+Both `workdir` and `init_script` can also be overridden per workflow (in the workflow JSON) or via CLI flags `--workdir` and `--init-script`.
 
 ---
 
@@ -99,10 +114,12 @@ OpenLoop uses a simple `config.json` in the root directory to define global sett
 - **Built for OpenCode:** Deeply integrated with the `opencode run` headless command.
 - **Zero External Dependencies:** Built entirely on the Python 3.13+ Standard Library. No `pip install` required. Just clone and run.
 - **Context Isolation:** Agents run in fresh, isolated OpenCode contexts, preventing the "context pollution" that plagues single-agent workflows.
-- **Deterministic Loop Control:** Hard limits (`max_loops`) and strict state evaluation ensure the system never hangs in an infinite loop.
-- **Flexible Agent Chaining:** Define any number of agents in the loop. It can be a 2-agent Author/Auditor, or a 5-agent pipeline.
-- **Visual Workflow Builder:** Includes a built-in Tkinter GUI to easily select agents, define loop sequences, and configure termination conditions.
-- **Ready-to-Use Examples:** Ships with fully fleshed-out `amala.md` and `vera.md` agents, plus a working `test_generation` workflow.
+- **Deterministic Loop Control:** Hard limits (`max_loops`) and strict state evaluation (including arbitrary Python expressions against the state payload) ensure the system never hangs in an infinite loop.
+- **Flexible Agent Chaining:** Define any number of agents per phase (preparation, loop, finalization). Supports complex multi-agent pipelines.
+- **Multiple Agents per Phase:** Preparation and Finalization phases support one or multiple agents executed in sequence.
+- **Init Script & Workdir:** Run a setup script (e.g., activate conda environment) and set the working directory before each agent invocation – configurable globally, per workflow, or via CLI.
+- **CLI & GUI Modes:** Use the visual Tkinter builder for interactive workflow design, or run headless via `--cli` for CI/CD integration.
+- **Ready-to-Use Examples:** Ships with fully fleshed-out `amala.md` (author), `vera.md` (auditor), and `proteus.md` (analyst) agents, plus a working `test_generation` workflow.
 
 ---
 
@@ -124,9 +141,12 @@ openloop/
 │   └── app.py                # Tkinter GUI for workflow configuration
 ├── agents/                   # Default directory for agent definitions
 │   ├── amala.md              # Example: The Test Author
-│   └── vera.md               # Example: The QA Auditor
-└── workflows/                # Default directory for saved workflow configs
-    └── test_generation.json  # Example: A ready-to-run Amala/Vera workflow
+│   ├── vera.md               # Example: The QA Auditor
+│   └── proteus.md            # Example: The Change Analyst
+├── workflows/                # Default directory for saved workflow configs
+│   └── test_generation.json  # Example: A ready-to-run Amala/Vera workflow
+└── tests/
+    └── integration.py        # Integration tests
 ```
 
 ---
@@ -167,6 +187,15 @@ You can also run headless (requires `opencode` in PATH):
 python openloop.py --cli --workflow workflows/test_generation.json
 ```
 
+Additional CLI options:
+
+| Flag | Description |
+|---|---|
+| `--cli` | Run in headless CLI mode |
+| `--workflow <path>` | Path to the workflow JSON file |
+| `--workdir <path>` | Override the working directory |
+| `--init-script <cmd>` | Override the init script/command |
+
 ---
 
 ## 🛣️ Roadmap
@@ -175,10 +204,16 @@ python openloop.py --cli --workflow workflows/test_generation.json
 - [x] Agent Loader & Subprocess Runner
 - [x] Execution Engine with Loop Control
 - [x] Tkinter GUI for Workflow Building
-- [x] Example Agents (Amala/Vera) & Example Workflow
-- [ ] CLI-only mode for CI/CD integration
-- [ ] Advanced state evaluation (e.g., evaluating Python expressions against the state payload)
-- [ ] Live context-injection for external tools (e.g., injecting `pytest` output directly into the state payload before Vera runs)
+- [x] Example Agents (Amala/Vera/Proteus) & Example Workflow
+- [x] CLI mode with `--cli`, `--workdir`, `--init-script` flags
+- [x] Advanced state evaluation (arbitrary Python expressions against the state payload)
+- [x] Multiple agents in preparation and finalization phases
+- [x] Workdir & init_script support (global, per-workflow, and CLI override)
+- [x] GUI preview pane for agent content
+- [x] Integration tests
+- [ ] Sub-workflow support in slots (Epic #18)
+- [ ] Script hooks as third element category in slots (Epic #19)
+- [ ] Dedicated documentation in `docs/`
 
 ---
 
