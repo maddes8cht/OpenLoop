@@ -129,6 +129,9 @@ class ExecutionEngine:
                 self.log(f"  Running agent: {agent_name}")
                 self._execute_agent(agent_name)
 
+                if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+                    return
+
                 if self._evaluate_end_condition(
                     workflow.end_state_condition
                 ):
