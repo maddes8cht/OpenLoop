@@ -1,7 +1,8 @@
 import json
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from core.agent import AgentDefinition, AgentLoader
 from core.config import Config
@@ -68,6 +69,7 @@ class ExecutionEngine:
         self,
         config: Optional[Config] = None,
         logger: Optional[LogCallback] = None,
+        stop_event: Optional[threading.Event] = None,
     ):
         self.config = config or Config()
         self.logger = logger or print
@@ -77,6 +79,7 @@ class ExecutionEngine:
             binary=self.config.opencode_binary,
             timeout=600,
         )
+        self._stop_event = stop_event or threading.Event()
 
     def execute_workflow(
         self, workflow_path: str | Path
@@ -112,6 +115,11 @@ class ExecutionEngine:
 
         self.state.current_phase = "loop"
         while self.state.iteration < workflow.max_loops:
+            if self._stop_event.is_set():
+                self.state.termination_reason = "stopped"
+                self.log("Execution stopped by user")
+                return
+
             self.state.iteration += 1
             self.log(
                 f"Loop iteration {self.state.iteration}/{workflow.max_loops}"
@@ -121,7 +129,9 @@ class ExecutionEngine:
                 self.log(f"  Running agent: {agent_name}")
                 self._execute_agent(agent_name)
 
-                if self.state.is_complete:
+                if self._evaluate_end_condition(
+                    workflow.end_state_condition
+                ):
                     self.log(
                         f"  Termination condition met (iteration {self.state.iteration})"
                     )
@@ -185,6 +195,24 @@ class ExecutionEngine:
             f"to the state (especially set is_complete to true "
             f"when you are satisfied)."
         )
+
+    def _evaluate_end_condition(self, condition: str) -> bool:
+        if condition == "is_complete == True":
+            return bool(self.state.is_complete)
+        ns = {
+            "is_complete": self.state.is_complete,
+            "iteration": self.state.iteration,
+            "termination_reason": self.state.termination_reason,
+            "phase": self.state.current_phase,
+            "payload": self.state.payload,
+        }
+        try:
+            return bool(eval(condition, {"__builtins__": {}}, ns))
+        except Exception as exc:
+            self.log(
+                f"  WARNING: end_state_condition evaluation failed: {exc}"
+            )
+            return False
 
     def log(self, message: str) -> None:
         self.logger(f"[OpenLoop] {message}")

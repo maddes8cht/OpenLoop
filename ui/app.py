@@ -3,12 +3,10 @@ import queue
 import threading
 from pathlib import Path
 from tkinter import (
-    BOTH,
     END,
     LEFT,
     N,
     S,
-    TOP,
     W,
     E,
     BooleanVar,
@@ -41,6 +39,7 @@ class WorkflowApp:
         self._engine = None
         self._workflow_path: Optional[str] = None
         self._execution_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
         self._running = False
         self._log_queue: queue.Queue = queue.Queue()
 
@@ -421,8 +420,9 @@ class WorkflowApp:
             from core.engine import ExecutionEngine
 
             cfg = self._config if isinstance(self._config, Config) else Config()
+            self._stop_event.clear()
             self._engine = ExecutionEngine(
-                config=cfg, logger=self._log
+                config=cfg, logger=self._log, stop_event=self._stop_event
             )
         except ImportError as exc:
             messagebox.showerror("Error", f"Missing core module: {exc}")
@@ -458,6 +458,7 @@ class WorkflowApp:
 
     def _stop_execution(self) -> None:
         self._log("Stop requested — finishing current agent...")
+        self._stop_event.set()
         self._running = False
         self._start_btn.configure(state="normal")
         self._stop_btn.configure(state="disabled")
