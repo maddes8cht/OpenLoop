@@ -356,11 +356,10 @@ class WorkflowApp:
             self._preview_text.configure(state="disabled")
             return
 
+        from core.markdown_renderer import render as md_render
+
         content = agent_path.read_text(encoding="utf-8")
-        self._preview_text.configure(state="normal")
-        self._preview_text.delete("1.0", END)
-        self._preview_text.insert("1.0", content)
-        self._preview_text.configure(state="disabled")
+        md_render(self._preview_text, content)
 
     def _add_to_zone(self, zone: str) -> None:
         sel = self._agent_listbox.curselection()

@@ -469,6 +469,21 @@ def test_entry_point_parses_args():
     assert args.workflow == "test.json"
 
 
+def test_markdown_renderer():
+    from tkinter import Tk, Text
+    root = Tk()
+    try:
+        w = Text(root)
+        from core.markdown_renderer import render
+        render(w, "# Hello\n\n**bold** and `code`")
+        text = w.get("1.0", "end - 1c")
+        assert "Hello" in text
+        assert "bold" in text
+        assert "code" in text
+    finally:
+        root.destroy()
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -512,6 +527,7 @@ def main():
         test_example_workflow_loads,
         test_all_core_modules_import,
         test_entry_point_parses_args,
+        test_markdown_renderer,
     ]:
         test(fn.__name__.replace("_", " ").replace("test ", ""), fn)
     failed += summary()
