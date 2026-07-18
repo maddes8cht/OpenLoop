@@ -75,6 +75,10 @@ class WorkflowApp:
         Button(toolbar, text="Save Workflow", command=self._save_workflow).pack(
             side=LEFT, padx=2
         )
+        Label(toolbar, text="  WF:").pack(side=LEFT)
+        self._workflow_path_var = StringVar()
+        wf_entry = Entry(toolbar, textvariable=self._workflow_path_var)
+        wf_entry.pack(side=LEFT, fill="x", expand=True, padx=2)
         Label(toolbar, text="  |  ").pack(side=LEFT)
         self._start_btn = Button(
             toolbar, text="Start Execution", command=self._start_execution
@@ -176,28 +180,6 @@ class WorkflowApp:
             variable=self._finalize_on_abort_var,
         ).grid(row=row, column=0, columnspan=2, sticky=W, pady=2)
         row += 1
-
-        # Workflow file
-        sep = ttk.Separator(config_frame, orient="horizontal")
-        sep.grid(row=row, column=0, columnspan=2, sticky=(W, E), pady=6)
-        row += 1
-
-        Label(config_frame, text="Workflow File:").grid(
-            row=row, column=0, columnspan=2, sticky=W, pady=1
-        )
-        row += 1
-
-        wf_file_frame = Frame(config_frame)
-        wf_file_frame.grid(row=row, column=0, columnspan=2, sticky=(W, E))
-        wf_file_frame.columnconfigure(0, weight=1)
-
-        self._workflow_path_var = StringVar()
-        Entry(
-            wf_file_frame, textvariable=self._workflow_path_var
-        ).pack(side=LEFT, fill="x", expand=True)
-        Button(
-            wf_file_frame, text="Browse", command=self._browse_workflow
-        ).pack(side=LEFT, padx=2)
 
         # Column 2: Agent Preview
         preview_frame = ttk.LabelFrame(content, text="Agent Preview", padding=4)
@@ -451,9 +433,6 @@ class WorkflowApp:
         self._workflow_path = path
         self._workflow_path_var.set(path)
         self._log(f"Saved workflow: {path}")
-
-    def _browse_workflow(self) -> None:
-        self._load_workflow()
 
     # ---- Configuration ----
 
