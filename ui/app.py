@@ -91,6 +91,7 @@ class WorkflowApp:
         # Main content area
         content = Frame(self._root)
         content.grid(row=1, column=0, sticky=(N, S, W, E), padx=4, pady=2)
+        content.columnconfigure(2, weight=1)
         content.rowconfigure(0, weight=1)
 
         # Column 0: Agent Pool
@@ -100,6 +101,7 @@ class WorkflowApp:
 
         self._agent_listbox = Listbox(agent_frame, width=22)
         self._agent_listbox.grid(row=0, column=0, sticky=(N, S, W, E), pady=2)
+        self._agent_listbox.bind("<<ListboxSelect>>", lambda e: self._show_preview(self._agent_listbox))
 
         agent_btn_frame = Frame(agent_frame)
         agent_btn_frame.grid(row=1, column=0, pady=2)
@@ -194,6 +196,25 @@ class WorkflowApp:
             wf_file_frame, text="Browse", command=self._browse_workflow
         ).pack(side=LEFT, padx=2)
 
+        # Column 2: Agent Preview
+        preview_frame = ttk.LabelFrame(content, text="Agent Preview", padding=4)
+        preview_frame.grid(row=0, column=2, sticky=(N, S, W, E), padx=2)
+        preview_frame.rowconfigure(0, weight=1)
+        preview_frame.columnconfigure(0, weight=1)
+
+        self._preview_text = Text(preview_frame, wrap="word", state="disabled")
+        preview_scroll = Scrollbar(
+            preview_frame, command=self._preview_text.yview
+        )
+        self._preview_text.configure(yscrollcommand=preview_scroll.set)
+
+        self._preview_text.grid(row=0, column=0, sticky=(N, S, W, E))
+        preview_scroll.grid(row=0, column=1, sticky=(N, S))
+
+        self._preview_text.configure(state="normal")
+        self._preview_text.insert("1.0", "Select an agent to preview")
+        self._preview_text.configure(state="disabled")
+
         # Bottom: Log
         log_frame = ttk.LabelFrame(
             self._root, text="Execution Log", padding=4
@@ -228,6 +249,7 @@ class WorkflowApp:
 
         listbox = Listbox(frame, width=22, height=listbox_height)
         listbox.grid(row=0, column=0, sticky=(N, S, W, E))
+        listbox.bind("<<ListboxSelect>>", lambda e, lb=listbox: self._show_preview(lb))
         setattr(self, f"_{zone}_listbox", listbox)
 
         btn_frame = Frame(frame)
@@ -268,6 +290,41 @@ class WorkflowApp:
                 self._agent_listbox.insert(END, name)
         except ImportError:
             pass
+
+    def _show_preview(self, source: Listbox) -> None:
+        for lb in [
+            self._agent_listbox,
+            self._prep_listbox,
+            self._loop_listbox,
+            self._final_listbox,
+        ]:
+            if lb != source:
+                lb.selection_clear(0, END)
+
+        sel = source.curselection()
+        if not sel:
+            self._preview_text.configure(state="normal")
+            self._preview_text.delete("1.0", END)
+            self._preview_text.insert("1.0", "Select an agent to preview")
+            self._preview_text.configure(state="disabled")
+            return
+
+        name = source.get(sel[0])
+        if self._config is None:
+            return
+        agent_path = Path(self._config.agents_dir) / f"{name}.md"
+        if not agent_path.exists():
+            self._preview_text.configure(state="normal")
+            self._preview_text.delete("1.0", END)
+            self._preview_text.insert("1.0", f"File not found: {agent_path}")
+            self._preview_text.configure(state="disabled")
+            return
+
+        content = agent_path.read_text(encoding="utf-8")
+        self._preview_text.configure(state="normal")
+        self._preview_text.delete("1.0", END)
+        self._preview_text.insert("1.0", content)
+        self._preview_text.configure(state="disabled")
 
     def _add_to_zone(self, zone: str) -> None:
         sel = self._agent_listbox.curselection()
