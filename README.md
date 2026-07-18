@@ -110,15 +110,16 @@ OpenLoop uses a simple `config.json` in the root directory to define global sett
 
 ```text
 openloop/
-├── main.py                   # Entry point (starts Tkinter GUI or CLI)
-├── config.json               # Global configuration (paths, binary name)
+├── openloop.py               # Entry point (starts Tkinter GUI or CLI)
+├── config.json               # Global configuration (optional, uses defaults)
 ├── requirements.txt          # Empty (Zero dependencies)
 ├── core/
-│   ├── engine.py             # The execution loop and state machine
+│   ├── config.py             # Configuration loader
 │   ├── state.py              # WorkflowState dataclass & serialization
-│   ├── agent.py              # AgentDefinition loader (Markdown + YAML)
 │   ├── parser.py             # State extraction from OpenCode stdout
-│   └── runner.py             # Subprocess wrapper for `opencode run`
+│   ├── agent.py              # AgentDefinition loader (Markdown + YAML)
+│   ├── runner.py             # Subprocess wrapper for `opencode run`
+│   └── engine.py             # The execution loop and state machine
 ├── ui/
 │   └── app.py                # Tkinter GUI for workflow configuration
 ├── agents/                   # Default directory for agent definitions
@@ -148,14 +149,23 @@ opencode --version
 Since there are no dependencies, you can start the GUI immediately:
 
 ```bash
-python main.py
+python openloop.py
 ```
 
+The GUI will show the available agents in the left panel. From there you can build a workflow, load the example, or configure a new one.
+
 ### 4. Execute the Example Workflow
-1. In the GUI, click **Load Workflow** and select `workflows/test_generation.json`.
-2. Review the configuration (Prep: None, Loop: Amala -> Vera, Final: None).
-3. Set your target directory/module in the execution parameters.
-4. Click **START EXECUTION** and watch the logs as Amala and Vera iterate.
+1. Launch the GUI: `python openloop.py`
+2. Click **Load Workflow** and select `workflows/test_generation.json`.
+3. The workflow builder populates with Amala and Vera in the Loop zone.
+4. Click **Start Execution** to run. The log panel shows live output as the engine iterates between authoring and auditing.
+5. Click **Stop Execution** to abort between iterations.
+
+You can also run headless (requires `opencode` in PATH):
+
+```bash
+python openloop.py --cli --workflow workflows/test_generation.json
+```
 
 ---
 
@@ -177,10 +187,3 @@ python main.py
 This project is developed iteratively using GitHub Issues. If you want to contribute, please check the open issues, pick one, and follow the standard fork-and-PR workflow. 
 
 *Note: All code, comments, and documentation must be written in English.*
-```
-
-### Nächste Schritte für das Repo
-
-Das README steht. Wenn du das Repo angelegt hast, schlage ich vor, dass wir als Nächstes die **GitHub Issues** formulieren. 
-
-Soll ich dir die Texte für die ersten 3-4 Issues (Core State, Agent Loader, Runner/Engine) direkt hier ausformulieren, damit du sie 1:1 in GitHub kopieren kannst? Das gibt uns den perfekten Fahrplan, wenn du das Repo dann in OpenCode lädst.

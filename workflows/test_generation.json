@@ -1,0 +1,8 @@
+{
+  "preparation_agent": null,
+  "loop_agents": ["amala", "vera"],
+  "finalization_agent": null,
+  "end_state_condition": "is_complete == True",
+  "max_loops": 10,
+  "finalize_on_abort": false
+}
