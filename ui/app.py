@@ -32,7 +32,7 @@ class WorkflowApp:
         self._root = Tk()
         self._root.title("OpenLoop — Workflow Builder")
         self._root.geometry("1100x700")
-        self._root.minsize(900, 600)
+        self._root.minsize(1000, 800)
 
         self._config_path = config_path
         self._config = None
@@ -91,7 +91,6 @@ class WorkflowApp:
         # Main content area
         content = Frame(self._root)
         content.grid(row=1, column=0, sticky=(N, S, W, E), padx=4, pady=2)
-        content.columnconfigure(1, weight=1)
         content.rowconfigure(0, weight=1)
 
         # Column 0: Agent Pool
@@ -127,23 +126,23 @@ class WorkflowApp:
         builder = Frame(content)
         builder.grid(row=0, column=1, sticky=(N, S, W, E), padx=2)
         builder.columnconfigure(0, weight=1)
-        builder.rowconfigure(0, weight=1)
-        builder.rowconfigure(1, weight=3)
-        builder.rowconfigure(2, weight=1)
+        builder.rowconfigure(0, weight=0)
+        builder.rowconfigure(1, weight=1)
+        builder.rowconfigure(2, weight=0)
 
         self._build_zone(
-            builder, "Preparation Agent", "prep", 0
+            builder, "Preparation Agent", "prep", 0, listbox_height=3
         )
         self._build_zone(builder, "Loop Agents", "loop", 1)
         self._build_zone(
-            builder, "Finalization Agent", "final", 2
+            builder, "Finalization Agent", "final", 2, listbox_height=3
         )
 
-        # Column 2: Configuration
+        # Configuration (below Finalization in builder column)
         config_frame = ttk.LabelFrame(
-            content, text="Configuration", padding=4
+            builder, text="Configuration", padding=4
         )
-        config_frame.grid(row=0, column=2, sticky=(N, S), padx=2)
+        config_frame.grid(row=3, column=0, sticky=(W, E), pady=2)
         config_frame.columnconfigure(1, weight=1)
 
         row = 0
@@ -220,13 +219,14 @@ class WorkflowApp:
         label: str,
         zone: str,
         row: int,
+        listbox_height: int = 10,
     ) -> None:
         frame = ttk.LabelFrame(parent, text=label, padding=4)
         frame.grid(row=row, column=0, sticky=(N, S, W, E), pady=2)
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
 
-        listbox = Listbox(frame)
+        listbox = Listbox(frame, width=22, height=listbox_height)
         listbox.grid(row=0, column=0, sticky=(N, S, W, E))
         setattr(self, f"_{zone}_listbox", listbox)
 
