@@ -76,7 +76,7 @@ def _make_mock_runner(responses: list | None = None):
     ]
     idx = [0]
 
-    def side_effect(prompt, timeout=None):
+    def side_effect(prompt, timeout=None, **kw):
         r = responses[idx[0] % len(responses)]
         idx[0] += 1
         return type("R", (), dict(r, error="", exit_code=0 if r["success"] else 1))()
@@ -237,7 +237,7 @@ def test_stop_event():
     stop_ev = threading.Event()
     engine = ExecutionEngine(stop_event=stop_ev)
 
-    def slow_run(prompt, timeout=None):
+    def slow_run(prompt, timeout=None, **kw):
         time.sleep(0.3)
         return type("R", (), {
             "success": True,

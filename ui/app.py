@@ -181,6 +181,40 @@ class WorkflowApp:
         ).grid(row=row, column=0, columnspan=2, sticky=W, pady=2)
         row += 1
 
+        sep = ttk.Separator(config_frame, orient="horizontal")
+        sep.grid(row=row, column=0, columnspan=2, sticky=(W, E), pady=4)
+        row += 1
+
+        Label(config_frame, text="Workdir:").grid(
+            row=row, column=0, sticky=W, pady=2
+        )
+        wd_frame = Frame(config_frame)
+        wd_frame.grid(row=row, column=1, sticky=(W, E), padx=4)
+        wd_frame.columnconfigure(0, weight=1)
+        self._workdir_var = StringVar()
+        Entry(wd_frame, textvariable=self._workdir_var).pack(
+            side=LEFT, fill="x", expand=True
+        )
+        Button(
+            wd_frame, text="Browse", command=self._browse_workdir
+        ).pack(side=LEFT, padx=1)
+        row += 1
+
+        Label(config_frame, text="Init Script:").grid(
+            row=row, column=0, sticky=W, pady=2
+        )
+        is_frame = Frame(config_frame)
+        is_frame.grid(row=row, column=1, sticky=(W, E), padx=4)
+        is_frame.columnconfigure(0, weight=1)
+        self._init_script_var = StringVar()
+        Entry(is_frame, textvariable=self._init_script_var).pack(
+            side=LEFT, fill="x", expand=True
+        )
+        Button(
+            is_frame, text="Browse", command=self._browse_init_script
+        ).pack(side=LEFT, padx=1)
+        row += 1
+
         # Column 2: Agent Preview
         preview_frame = ttk.LabelFrame(content, text="Agent Preview", padding=4)
         preview_frame.grid(row=0, column=2, sticky=(N, S, W, E), padx=2)
@@ -356,6 +390,12 @@ class WorkflowApp:
         data["finalize_on_abort"] = bool(
             self._finalize_on_abort_var.get()
         )
+        wd = self._workdir_var.get().strip()
+        if wd:
+            data["workdir"] = wd
+        iscript = self._init_script_var.get().strip()
+        if iscript:
+            data["init_script"] = iscript
         return data
 
     def _load_workflow_into_ui(self, data: dict) -> None:
@@ -395,6 +435,8 @@ class WorkflowApp:
         self._finalize_on_abort_var.set(
             bool(data.get("finalize_on_abort", False))
         )
+        self._workdir_var.set(data.get("workdir", "") or "")
+        self._init_script_var.set(data.get("init_script", "") or "")
 
     def _load_workflow(self) -> None:
         path = filedialog.askopenfilename(
@@ -433,6 +475,27 @@ class WorkflowApp:
         self._workflow_path = path
         self._workflow_path_var.set(path)
         self._log(f"Saved workflow: {path}")
+
+    def _browse_workdir(self) -> None:
+        path = filedialog.askdirectory(
+            title="Select Working Directory",
+        )
+        if path:
+            self._workdir_var.set(path)
+
+    def _browse_init_script(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Select Init Script",
+            filetypes=[
+                ("Script files", "*.ps1 *.bat *.cmd *.sh"),
+                ("PowerShell", "*.ps1"),
+                ("Batch", "*.bat *.cmd"),
+                ("Shell", "*.sh"),
+                ("All files", "*.*"),
+            ],
+        )
+        if path:
+            self._init_script_var.set(path)
 
     # ---- Configuration ----
 

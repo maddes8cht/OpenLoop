@@ -13,6 +13,8 @@ class Config:
     workflows_dir: str = "./workflows"
     opencode_binary: str = "opencode"
     default_max_loops: int = 10
+    workdir: Optional[str] = None
+    init_script: Optional[str] = None
 
     @classmethod
     def load(cls, path: str | Path = "config.json") -> "Config":
@@ -42,6 +44,8 @@ class Config:
             workflows_dir=str(raw.get("workflows_dir", cls.workflows_dir)),
             opencode_binary=str(raw.get("opencode_binary", cls.opencode_binary)),
             default_max_loops=int(raw.get("default_max_loops", cls.default_max_loops)),
+            workdir=raw.get("workdir"),
+            init_script=raw.get("init_script"),
         )
 
     def _validate(self) -> None:
