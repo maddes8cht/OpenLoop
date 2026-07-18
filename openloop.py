@@ -71,7 +71,7 @@ def _run_cli(args: argparse.Namespace, config) -> None:
         data = json_loads(Path(args.workflow).read_text(encoding="utf-8"))
 
         if args.workdir:
-            data["workdir"] = args.workdir
+            data["workdir"] = str(Path(args.workdir).resolve())
         if args.init_script:
             data["init_script"] = args.init_script
 

@@ -58,7 +58,7 @@ class WorkflowApp:
         if workflow_path:
             self._load_workflow_from_path(workflow_path)
         if workdir:
-            self._workdir_var.set(workdir)
+            self._workdir_var.set(str(Path(workdir).resolve()))
         if init_script:
             self._init_script_var.set(init_script)
         self._update_title()
@@ -450,8 +450,8 @@ class WorkflowApp:
         self._finalize_on_abort_var.set(
             bool(data.get("finalize_on_abort", False))
         )
-        if "workdir" in data:
-            self._workdir_var.set(data["workdir"] or "")
+        if "workdir" in data and data["workdir"]:
+            self._workdir_var.set(str(Path(data["workdir"]).resolve()))
         if "init_script" in data:
             self._init_script_var.set(data["init_script"] or "")
 
