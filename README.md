@@ -79,33 +79,18 @@ A workflow in OpenLoop consists of three distinct phases:
 
 ---
 
-## ⚙️ Configuration
+## Documentation
 
-OpenLoop uses a simple `config.json` in the root directory to define global settings. This allows you to customize where OpenLoop looks for agents and workflows.
+Detailed reference documentation is available in the [`docs/`](./docs/) directory:
 
-```json
-{
-  "agents_dir": "./agents",
-  "workflows_dir": "./workflows",
-  "opencode_binary": "opencode",
-  "default_max_loops": 10,
-  "workdir": "/path/to/project",
-  "init_script": "conda activate myenv"
-}
-```
-
-| Field | Default | Description |
-|---|---|---|
-| `agents_dir` | `"./agents"` | Directory containing agent `.md` files |
-| `workflows_dir` | `"./workflows"` | Directory containing workflow `.json` files |
-| `opencode_binary` | `"opencode"` | Path or name of the opencode binary |
-| `default_max_loops` | `10` | Maximum loop iterations |
-| `workdir` | `None` | Working directory for the opencode subprocess |
-| `init_script` | `None` | Script or command to run before each opencode invocation (e.g., to activate a conda environment) |
-
-*If `config.json` is missing, OpenLoop falls back to the default values shown above.*
-
-Both `workdir` and `init_script` can also be overridden per workflow (in the workflow JSON) or via CLI flags `--workdir` and `--init-script`.
+| Document | Description |
+|---|---|
+| [Agents](./docs/agents.md) | Agent file format, frontmatter fields, system prompt conventions |
+| [Workflows](./docs/workflows.md) | Workflow JSON schema, slot configuration, `end_state_condition` syntax |
+| [CLI](./docs/cli.md) | Complete CLI reference, flags, exit codes, examples |
+| [Configuration](./docs/configuration.md) | `config.json` schema, field descriptions, override priority |
+| [State](./docs/state.md) | `WorkflowState` API, merge behavior, agent output format |
+| [GUI](./docs/gui.md) | Tkinter GUI layout, zones, toolbar actions |
 
 ---
 
@@ -213,7 +198,7 @@ Additional CLI options:
 - [x] Integration tests
 - [ ] Sub-workflow support in slots (Epic #18)
 - [ ] Script hooks as third element category in slots (Epic #19)
-- [ ] Dedicated documentation in `docs/`
+- [x] Dedicated documentation in `docs/` (Issue #20)
 
 ---
 
