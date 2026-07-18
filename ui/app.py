@@ -101,6 +101,9 @@ class WorkflowApp:
 
         self._agent_listbox = Listbox(agent_frame, width=22)
         self._agent_listbox.grid(row=0, column=0, sticky=(N, S, W, E), pady=2)
+        agent_scroll = Scrollbar(agent_frame, command=self._agent_listbox.yview)
+        self._agent_listbox.configure(yscrollcommand=agent_scroll.set)
+        agent_scroll.grid(row=0, column=1, sticky=(N, S))
         self._agent_listbox.bind("<<ListboxSelect>>", lambda e: self._show_preview(self._agent_listbox))
 
         agent_btn_frame = Frame(agent_frame)
@@ -133,11 +136,11 @@ class WorkflowApp:
         builder.rowconfigure(2, weight=0)
 
         self._build_zone(
-            builder, "Preparation Agent", "prep", 0, listbox_height=5
+            builder, "Preparation Agent", "prep", 0, listbox_height=4
         )
         self._build_zone(builder, "Loop Agents", "loop", 1)
         self._build_zone(
-            builder, "Finalization Agent", "final", 2, listbox_height=5
+            builder, "Finalization Agent", "final", 2, listbox_height=4
         )
 
         # Configuration (below Finalization in builder column)
@@ -249,6 +252,9 @@ class WorkflowApp:
 
         listbox = Listbox(frame, width=22, height=listbox_height)
         listbox.grid(row=0, column=0, sticky=(N, S, W, E))
+        scroll = Scrollbar(frame, command=listbox.yview)
+        listbox.configure(yscrollcommand=scroll.set)
+        scroll.grid(row=0, column=1, sticky=(N, S))
         listbox.bind("<<ListboxSelect>>", lambda e, lb=listbox: self._show_preview(lb))
         setattr(self, f"_{zone}_listbox", listbox)
 
