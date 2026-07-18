@@ -437,7 +437,7 @@ def test_example_workflow_loads():
     wf = WorkflowConfig.load(str(ROOT / "workflows" / "test_generation.json"))
     assert wf.loop_agents == ["amala", "vera"]
     assert wf.max_loops == 10
-    assert wf.preparation_agent is None
+    assert wf.preparation_agents == []
 
 
 def test_all_core_modules_import():

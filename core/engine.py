@@ -13,9 +13,9 @@ from core.state import WorkflowState
 
 @dataclass
 class WorkflowConfig:
-    preparation_agent: Optional[str] = None
+    preparation_agents: list[str] = field(default_factory=list)
     loop_agents: list[str] = field(default_factory=list)
-    finalization_agent: Optional[str] = None
+    finalization_agents: list[str] = field(default_factory=list)
     end_state_condition: str = "is_complete == True"
     max_loops: int = 10
     finalize_on_abort: bool = False
@@ -37,10 +37,26 @@ class WorkflowConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> "WorkflowConfig":
+        prep = data.get("preparation_agents")
+        if prep is None:
+            prep = data.get("preparation_agent")
+        if isinstance(prep, str):
+            prep = [prep]
+        elif not isinstance(prep, list):
+            prep = []
+
+        final = data.get("finalization_agents")
+        if final is None:
+            final = data.get("finalization_agent")
+        if isinstance(final, str):
+            final = [final]
+        elif not isinstance(final, list):
+            final = []
+
         return cls(
-            preparation_agent=data.get("preparation_agent"),
+            preparation_agents=prep,
             loop_agents=list(data.get("loop_agents", [])),
-            finalization_agent=data.get("finalization_agent"),
+            finalization_agents=final,
             end_state_condition=str(
                 data.get("end_state_condition", cls.end_state_condition)
             ),
@@ -52,9 +68,9 @@ class WorkflowConfig:
 
     def to_dict(self) -> dict:
         return {
-            "preparation_agent": self.preparation_agent,
+            "preparation_agents": self.preparation_agents,
             "loop_agents": self.loop_agents,
-            "finalization_agent": self.finalization_agent,
+            "finalization_agents": self.finalization_agents,
             "end_state_condition": self.end_state_condition,
             "max_loops": self.max_loops,
             "finalize_on_abort": self.finalize_on_abort,
@@ -99,13 +115,14 @@ class ExecutionEngine:
         return self.state
 
     def _run_preparation(self, workflow: WorkflowConfig) -> None:
-        if not workflow.preparation_agent:
+        if not workflow.preparation_agents:
             self.log("No preparation agent defined — skipping")
             return
 
         self.state.current_phase = "preparation"
-        self.log(f"Preparation phase: {workflow.preparation_agent}")
-        self._execute_agent(workflow.preparation_agent)
+        for agent_name in workflow.preparation_agents:
+            self.log(f"Preparation phase: {agent_name}")
+            self._execute_agent(agent_name)
 
     def _run_loop(self, workflow: WorkflowConfig) -> None:
         if not workflow.loop_agents:
@@ -145,7 +162,7 @@ class ExecutionEngine:
         self.log(f"Max loops ({workflow.max_loops}) reached — terminating loop")
 
     def _run_finalization(self, workflow: WorkflowConfig) -> None:
-        if not workflow.finalization_agent:
+        if not workflow.finalization_agents:
             self.log("No finalization agent defined — skipping")
             return
 
@@ -162,8 +179,9 @@ class ExecutionEngine:
             return
 
         self.state.current_phase = "finalization"
-        self.log(f"Finalization phase: {workflow.finalization_agent}")
-        self._execute_agent(workflow.finalization_agent)
+        for agent_name in workflow.finalization_agents:
+            self.log(f"Finalization phase: {agent_name}")
+            self._execute_agent(agent_name)
 
     def _execute_agent(self, agent_name: str) -> None:
         agent = self.agent_loader.get_agent(agent_name)

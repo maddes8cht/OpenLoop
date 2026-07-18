@@ -133,11 +133,11 @@ class WorkflowApp:
         builder.rowconfigure(2, weight=0)
 
         self._build_zone(
-            builder, "Preparation Agent", "prep", 0, listbox_height=3
+            builder, "Preparation Agent", "prep", 0, listbox_height=5
         )
         self._build_zone(builder, "Loop Agents", "loop", 1)
         self._build_zone(
-            builder, "Finalization Agent", "final", 2, listbox_height=3
+            builder, "Finalization Agent", "final", 2, listbox_height=5
         )
 
         # Configuration (below Finalization in builder column)
@@ -262,19 +262,18 @@ class WorkflowApp:
             side=LEFT, padx=1
         )
 
-        if zone == "loop":
-            Button(
-                btn_frame,
-                text="▲ Up",
-                width=5,
-                command=lambda: self._move_loop(-1),
-            ).pack(side=LEFT, padx=1)
-            Button(
-                btn_frame,
-                text="▼ Down",
-                width=5,
-                command=lambda: self._move_loop(1),
-            ).pack(side=LEFT, padx=1)
+        Button(
+            btn_frame,
+            text="▲ Up",
+            width=5,
+            command=lambda z=zone: self._move_agent(z, -1),
+        ).pack(side=LEFT, padx=1)
+        Button(
+            btn_frame,
+            text="▼ Down",
+            width=5,
+            command=lambda z=zone: self._move_agent(z, 1),
+        ).pack(side=LEFT, padx=1)
 
     # ---- Agent / Zone Management ----
 
@@ -332,10 +331,7 @@ class WorkflowApp:
             return
         name = self._agent_listbox.get(sel[0])
         listbox = getattr(self, f"_{zone}_listbox")
-        if zone == "loop":
-            listbox.insert(END, name)
-        elif not listbox.size():
-            listbox.insert(END, name)
+        listbox.insert(END, name)
 
     def _remove_from_zone(self, zone: str) -> None:
         listbox = getattr(self, f"_{zone}_listbox")
@@ -343,8 +339,8 @@ class WorkflowApp:
         if sel:
             listbox.delete(sel[0])
 
-    def _move_loop(self, direction: int) -> None:
-        lb = self._loop_listbox
+    def _move_agent(self, zone: str, direction: int) -> None:
+        lb = getattr(self, f"_{zone}_listbox")
         sel = lb.curselection()
         if not sel:
             return
@@ -361,11 +357,9 @@ class WorkflowApp:
 
     def _get_workflow_data(self) -> dict:
         data: dict = {}
-        if self._prep_listbox.size():
-            data["preparation_agent"] = self._prep_listbox.get(0)
+        data["preparation_agents"] = list(self._prep_listbox.get(0, END))
         data["loop_agents"] = list(self._loop_listbox.get(0, END))
-        if self._final_listbox.size():
-            data["finalization_agent"] = self._final_listbox.get(0)
+        data["finalization_agents"] = list(self._final_listbox.get(0, END))
         try:
             data["max_loops"] = int(self._max_loops_var.get())
         except ValueError:
@@ -381,16 +375,26 @@ class WorkflowApp:
         self._loop_listbox.delete(0, END)
         self._final_listbox.delete(0, END)
 
-        if data.get("preparation_agent"):
-            self._prep_listbox.insert(
-                END, data["preparation_agent"]
-            )
+        prep = data.get("preparation_agents")
+        if prep is None:
+            prep = data.get("preparation_agent")
+        if isinstance(prep, str):
+            self._prep_listbox.insert(END, prep)
+        elif prep:
+            for agent in prep:
+                self._prep_listbox.insert(END, agent)
+
         for agent in data.get("loop_agents", []):
             self._loop_listbox.insert(END, agent)
-        if data.get("finalization_agent"):
-            self._final_listbox.insert(
-                END, data["finalization_agent"]
-            )
+
+        final = data.get("finalization_agents")
+        if final is None:
+            final = data.get("finalization_agent")
+        if isinstance(final, str):
+            self._final_listbox.insert(END, final)
+        elif final:
+            for agent in final:
+                self._final_listbox.insert(END, agent)
 
         self._max_loops_var.set(str(data.get("max_loops", 10)))
         self._end_condition_var.set(
