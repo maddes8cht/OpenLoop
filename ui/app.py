@@ -1,4 +1,5 @@
 import json
+import os
 import queue
 import threading
 from pathlib import Path
@@ -28,7 +29,13 @@ from typing import Optional
 
 
 class WorkflowApp:
-    def __init__(self, config_path: str = "config.json") -> None:
+    def __init__(
+        self,
+        config_path: str = "config.json",
+        workflow_path: Optional[str] = None,
+        workdir: Optional[str] = None,
+        init_script: Optional[str] = None,
+    ) -> None:
         self._root = Tk()
         self._root.title("OpenLoop — Workflow Builder")
         self._root.geometry("1100x700")
@@ -47,6 +54,14 @@ class WorkflowApp:
         self._load_config()
         self._refresh_agent_list()
         self._poll_log_queue()
+
+        if workflow_path:
+            self._load_workflow_from_path(workflow_path)
+        if workdir:
+            self._workdir_var.set(str(Path(workdir).resolve()))
+        if init_script:
+            self._init_script_var.set(init_script)
+        self._update_title()
 
     # ---- Public API ----
 
@@ -179,6 +194,40 @@ class WorkflowApp:
             text="Finalize on Abort",
             variable=self._finalize_on_abort_var,
         ).grid(row=row, column=0, columnspan=2, sticky=W, pady=2)
+        row += 1
+
+        sep = ttk.Separator(config_frame, orient="horizontal")
+        sep.grid(row=row, column=0, columnspan=2, sticky=(W, E), pady=4)
+        row += 1
+
+        Label(config_frame, text="Workdir:").grid(
+            row=row, column=0, sticky=W, pady=2
+        )
+        wd_frame = Frame(config_frame)
+        wd_frame.grid(row=row, column=1, sticky=(W, E), padx=4)
+        wd_frame.columnconfigure(0, weight=1)
+        self._workdir_var = StringVar(value=os.getcwd())
+        Entry(wd_frame, textvariable=self._workdir_var).pack(
+            side=LEFT, fill="x", expand=True
+        )
+        Button(
+            wd_frame, text="Browse", command=self._browse_workdir
+        ).pack(side=LEFT, padx=1)
+        row += 1
+
+        Label(config_frame, text="Init Script:").grid(
+            row=row, column=0, sticky=W, pady=2
+        )
+        is_frame = Frame(config_frame)
+        is_frame.grid(row=row, column=1, sticky=(W, E), padx=4)
+        is_frame.columnconfigure(0, weight=1)
+        self._init_script_var = StringVar()
+        Entry(is_frame, textvariable=self._init_script_var).pack(
+            side=LEFT, fill="x", expand=True
+        )
+        Button(
+            is_frame, text="Browse", command=self._browse_init_script
+        ).pack(side=LEFT, padx=1)
         row += 1
 
         # Column 2: Agent Preview
@@ -356,6 +405,12 @@ class WorkflowApp:
         data["finalize_on_abort"] = bool(
             self._finalize_on_abort_var.get()
         )
+        wd = self._workdir_var.get().strip()
+        if wd:
+            data["workdir"] = wd
+        iscript = self._init_script_var.get().strip()
+        if iscript:
+            data["init_script"] = iscript
         return data
 
     def _load_workflow_into_ui(self, data: dict) -> None:
@@ -395,6 +450,22 @@ class WorkflowApp:
         self._finalize_on_abort_var.set(
             bool(data.get("finalize_on_abort", False))
         )
+        if "workdir" in data and data["workdir"]:
+            self._workdir_var.set(str(Path(data["workdir"]).resolve()))
+        if "init_script" in data:
+            self._init_script_var.set(data["init_script"] or "")
+
+    def _load_workflow_from_path(self, path: str) -> None:
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            self._load_workflow_into_ui(data)
+            self._workflow_path = path
+            self._workflow_path_var.set(path)
+            self._update_title()
+            self._log(f"Loaded workflow: {path}")
+        except (json.JSONDecodeError, FileNotFoundError) as exc:
+            if self._workflow_path:
+                messagebox.showerror("Error", str(exc))
 
     def _load_workflow(self) -> None:
         path = filedialog.askopenfilename(
@@ -406,14 +477,7 @@ class WorkflowApp:
         )
         if not path:
             return
-        try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-            self._load_workflow_into_ui(data)
-            self._workflow_path = path
-            self._workflow_path_var.set(path)
-            self._log(f"Loaded workflow: {path}")
-        except (json.JSONDecodeError, FileNotFoundError) as exc:
-            messagebox.showerror("Error", str(exc))
+        self._load_workflow_from_path(path)
 
     def _save_workflow(self) -> None:
         path = filedialog.asksaveasfilename(
@@ -433,6 +497,35 @@ class WorkflowApp:
         self._workflow_path = path
         self._workflow_path_var.set(path)
         self._log(f"Saved workflow: {path}")
+
+    def _update_title(self) -> None:
+        wd = self._workdir_var.get().strip()
+        title = "OpenLoop — Workflow Builder"
+        if wd:
+            title += f" — {wd}"
+        self._root.title(title)
+
+    def _browse_workdir(self) -> None:
+        path = filedialog.askdirectory(
+            title="Select Working Directory",
+        )
+        if path:
+            self._workdir_var.set(path)
+            self._update_title()
+
+    def _browse_init_script(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Select Init Script",
+            filetypes=[
+                ("Script files", "*.ps1 *.bat *.cmd *.sh"),
+                ("PowerShell", "*.ps1"),
+                ("Batch", "*.bat *.cmd"),
+                ("Shell", "*.sh"),
+                ("All files", "*.*"),
+            ],
+        )
+        if path:
+            self._init_script_var.set(path)
 
     # ---- Configuration ----
 

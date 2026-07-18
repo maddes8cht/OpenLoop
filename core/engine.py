@@ -19,6 +19,8 @@ class WorkflowConfig:
     end_state_condition: str = "is_complete == True"
     max_loops: int = 10
     finalize_on_abort: bool = False
+    workdir: Optional[str] = None
+    init_script: Optional[str] = None
 
     @classmethod
     def load(cls, path: str | Path) -> "WorkflowConfig":
@@ -64,6 +66,8 @@ class WorkflowConfig:
             finalize_on_abort=bool(
                 data.get("finalize_on_abort", cls.finalize_on_abort)
             ),
+            workdir=data.get("workdir"),
+            init_script=data.get("init_script"),
         )
 
     def to_dict(self) -> dict:
@@ -74,6 +78,8 @@ class WorkflowConfig:
             "end_state_condition": self.end_state_condition,
             "max_loops": self.max_loops,
             "finalize_on_abort": self.finalize_on_abort,
+            "workdir": self.workdir,
+            "init_script": self.init_script,
         }
 
 
@@ -107,6 +113,9 @@ class ExecutionEngine:
         workflow = WorkflowConfig.from_dict(data)
         self.state = WorkflowState()
         self.log(f"Loaded workflow: {workflow.loop_agents}")
+
+        self._workdir = workflow.workdir or self.config.workdir
+        self._init_script = workflow.init_script or self.config.init_script
 
         self._run_preparation(workflow)
         self._run_loop(workflow)
@@ -186,7 +195,11 @@ class ExecutionEngine:
     def _execute_agent(self, agent_name: str) -> None:
         agent = self.agent_loader.get_agent(agent_name)
         prompt = self._build_prompt(agent)
-        result = self.runner.run(prompt)
+        result = self.runner.run(
+            prompt,
+            cwd=getattr(self, "_workdir", None),
+            init_script=getattr(self, "_init_script", None),
+        )
 
         if not result.success:
             self.log(f"  Agent '{agent_name}' failed (exit {result.exit_code})")

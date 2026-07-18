@@ -16,7 +16,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--workflow",
         type=str,
         default=None,
-        help="Path to workflow JSON file (CLI mode only)",
+        help="Path to workflow JSON file (pre-loads in GUI, executes in CLI mode)",
+    )
+    parser.add_argument(
+        "--workdir",
+        type=str,
+        default=None,
+        help="Working directory for agent subprocess (overrides config/workflow)",
+    )
+    parser.add_argument(
+        "--init-script",
+        type=str,
+        dest="init_script",
+        default=None,
+        help="Init script or command to run before each agent (overrides config/workflow)",
     )
     parser.add_argument(
         "--config",
@@ -49,12 +62,21 @@ def _run_cli(args: argparse.Namespace, config) -> None:
         sys.exit(1)
 
     try:
+        from json import loads as json_loads
+        from pathlib import Path
         from core.config import Config
         from core.engine import ExecutionEngine
 
         cfg = config if isinstance(config, Config) else Config.load(args.config)
+        data = json_loads(Path(args.workflow).read_text(encoding="utf-8"))
+
+        if args.workdir:
+            data["workdir"] = str(Path(args.workdir).resolve())
+        if args.init_script:
+            data["init_script"] = args.init_script
+
         engine = ExecutionEngine(config=cfg)
-        engine.execute_workflow(args.workflow)
+        engine.execute_workflow_data(data)
 
         state = engine.state
         print(f"\nWorkflow finished: {state.termination_reason}")
@@ -77,7 +99,12 @@ def _run_gui(args: argparse.Namespace, config) -> None:
         print("Install Tkinter or use --cli mode")
         sys.exit(1)
 
-    app = WorkflowApp(config_path=args.config)
+    app = WorkflowApp(
+        config_path=args.config,
+        workflow_path=args.workflow,
+        workdir=args.workdir,
+        init_script=args.init_script,
+    )
     try:
         app.run()
     except KeyboardInterrupt:
