@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from core.agent import AgentDefinition, AgentLoader
 from core.config import Config
@@ -32,18 +32,32 @@ class WorkflowConfig:
         if not isinstance(raw, dict):
             raise ValueError("Workflow file must contain a JSON object")
 
+        return cls.from_dict(raw)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "WorkflowConfig":
         return cls(
-            preparation_agent=raw.get("preparation_agent"),
-            loop_agents=list(raw.get("loop_agents", [])),
-            finalization_agent=raw.get("finalization_agent"),
+            preparation_agent=data.get("preparation_agent"),
+            loop_agents=list(data.get("loop_agents", [])),
+            finalization_agent=data.get("finalization_agent"),
             end_state_condition=str(
-                raw.get("end_state_condition", cls.end_state_condition)
+                data.get("end_state_condition", cls.end_state_condition)
             ),
-            max_loops=int(raw.get("max_loops", cls.max_loops)),
+            max_loops=int(data.get("max_loops", cls.max_loops)),
             finalize_on_abort=bool(
-                raw.get("finalize_on_abort", cls.finalize_on_abort)
+                data.get("finalize_on_abort", cls.finalize_on_abort)
             ),
         )
+
+    def to_dict(self) -> dict:
+        return {
+            "preparation_agent": self.preparation_agent,
+            "loop_agents": self.loop_agents,
+            "finalization_agent": self.finalization_agent,
+            "end_state_condition": self.end_state_condition,
+            "max_loops": self.max_loops,
+            "finalize_on_abort": self.finalize_on_abort,
+        }
 
 
 LogCallback = Callable[[str], None]
@@ -68,8 +82,12 @@ class ExecutionEngine:
         self, workflow_path: str | Path
     ) -> WorkflowState:
         workflow = WorkflowConfig.load(workflow_path)
+        return self.execute_workflow_data(workflow.to_dict())
+
+    def execute_workflow_data(self, data: dict) -> WorkflowState:
+        workflow = WorkflowConfig.from_dict(data)
         self.state = WorkflowState()
-        self.log(f"Loaded workflow: {Path(workflow_path).name}")
+        self.log(f"Loaded workflow: {workflow.loop_agents}")
 
         self._run_preparation(workflow)
         self._run_loop(workflow)
@@ -83,9 +101,7 @@ class ExecutionEngine:
             return
 
         self.state.current_phase = "preparation"
-        self.log(
-            f"Preparation phase: {workflow.preparation_agent}"
-        )
+        self.log(f"Preparation phase: {workflow.preparation_agent}")
         self._execute_agent(workflow.preparation_agent)
 
     def _run_loop(self, workflow: WorkflowConfig) -> None:
@@ -113,9 +129,7 @@ class ExecutionEngine:
                     return
 
         self.state.termination_reason = "max_loops_reached"
-        self.log(
-            f"Max loops ({workflow.max_loops}) reached — terminating loop"
-        )
+        self.log(f"Max loops ({workflow.max_loops}) reached — terminating loop")
 
     def _run_finalization(self, workflow: WorkflowConfig) -> None:
         if not workflow.finalization_agent:
@@ -131,15 +145,11 @@ class ExecutionEngine:
         )
 
         if not should_finalize:
-            self.log(
-                "Finalization skipped (configured to run on completion only)"
-            )
+            self.log("Finalization skipped (configured to run on completion only)")
             return
 
         self.state.current_phase = "finalization"
-        self.log(
-            f"Finalization phase: {workflow.finalization_agent}"
-        )
+        self.log(f"Finalization phase: {workflow.finalization_agent}")
         self._execute_agent(workflow.finalization_agent)
 
     def _execute_agent(self, agent_name: str) -> None:
@@ -148,20 +158,14 @@ class ExecutionEngine:
         result = self.runner.run(prompt)
 
         if not result.success:
-            self.log(
-                f"  Agent '{agent_name}' failed (exit {result.exit_code})"
-            )
-            self.state.termination_reason = (
-                f"agent_error:{agent_name}"
-            )
+            self.log(f"  Agent '{agent_name}' failed (exit {result.exit_code})")
+            self.state.termination_reason = f"agent_error:{agent_name}"
             return
 
         update = StateParser.extract_state_update(result.output)
         if update is not None:
             self.state.merge(update)
-            self.log(
-                f"  State updated: {json.dumps(update)}"
-            )
+            self.log(f"  State updated: {json.dumps(update)}")
         else:
             self.log(
                 f"  WARNING: No state update found in output from '{agent_name}'"
