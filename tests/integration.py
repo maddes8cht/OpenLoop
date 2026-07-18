@@ -470,16 +470,45 @@ def test_entry_point_parses_args():
 
 
 def test_markdown_renderer():
-    from tkinter import Tk, Text
+    from tkinter import Tk, Text, font
     root = Tk()
     try:
         w = Text(root)
         from core.markdown_renderer import render
-        render(w, "# Hello\n\n**bold** and `code`")
+        render(w, """# Heading
+
+**bold** and `code`
+
+---
+front: matter
+---
+
+```
+code block
+line two
+```
+
+- bullet
+
+> quote""")
         text = w.get("1.0", "end - 1c")
-        assert "Hello" in text
+        assert "Heading" in text
         assert "bold" in text
         assert "code" in text
+        assert "front" in text
+        assert "matter" in text
+        assert "code block" in text
+        assert "line two" in text
+        assert "bullet" in text
+        assert "quote" in text
+
+        default_family = font.Font(font=w.cget("font")).actual()["family"]
+        mono_family = font.nametofont("TkFixedFont").actual()["family"]
+        assert default_family != mono_family, \
+            f"Default ({default_family}) should differ from mono ({mono_family})"
+        tag_family = font.Font(font=w.tag_cget("codeblock", "font")).actual()["family"]
+        assert tag_family == mono_family, \
+            f"Codeblock tag font ({tag_family}) should be resolved mono ({mono_family})"
     finally:
         root.destroy()
 

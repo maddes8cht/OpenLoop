@@ -1,5 +1,6 @@
 import re
 import webbrowser
+from tkinter import font as _tkfont
 
 BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
@@ -14,6 +15,7 @@ FENCE_RE = re.compile(r"^```")
 
 
 def _tag_cfg(w):
+    mono = _tkfont.nametofont("TkFixedFont").actual()["family"]
     w.tag_configure("h1", font=("TkDefaultFont", 16, "bold"))
     w.tag_configure("h2", font=("TkDefaultFont", 14, "bold"))
     w.tag_configure("h3", font=("TkDefaultFont", 12, "bold"))
@@ -22,14 +24,18 @@ def _tag_cfg(w):
     w.tag_configure("h6", font=("TkDefaultFont", 10, "bold"), foreground="#555555")
     w.tag_configure("bold", font=("TkDefaultFont", 10, "bold"))
     w.tag_configure("italic", font=("TkDefaultFont", 10, "italic"))
-    w.tag_configure("code", font=("TkFixedFont", 10))
-    w.tag_configure("codeblock", font=("TkFixedFont", 10), background="#f0f0f0")
+    w.tag_configure("code", font=(mono, 10))
+    w.tag_configure("codeblock", font=(mono, 10),
+                    background="#dcdcdc",
+                    lmargin1=16, lmargin2=16)
     w.tag_configure("blockquote", lmargin1=30, lmargin2=35,
                     font=("TkDefaultFont", 10, "italic"))
     w.tag_configure("list", lmargin1=20, lmargin2=30)
     w.tag_configure("link", foreground="blue", underline=True)
-    w.tag_configure("frontmatter", foreground="#888888")
-    w.tag_configure("table", font=("TkFixedFont", 10))
+    w.tag_configure("frontmatter", font=("TkDefaultFont", 10),
+                    foreground="#444444", background="#f0f0f0")
+    w.tag_configure("hrule", foreground="#cccccc", font=("TkDefaultFont", 6))
+    w.tag_configure("table", font=(mono, 10))
 
 
 _link_map: dict = {}
@@ -88,7 +94,7 @@ def _insert_line(w, line, tag):
     w.insert("end", line + "\n", tag)
 
 
-def _render_line(w, line, _line_num):
+def _render_line(w, line):
     s = line.strip()
 
     if not s:
@@ -102,7 +108,7 @@ def _render_line(w, line, _line_num):
         return
 
     if HR_RE.match(s):
-        w.insert("end", "─" * 50 + "\n", "code")
+        w.insert("end", "─" * 50 + "\n", "hrule")
         return
 
     m = BLOCKQUOTE_RE.match(line)
@@ -113,7 +119,7 @@ def _render_line(w, line, _line_num):
 
     m = BULLET_RE.match(s)
     if m:
-        w.insert("end", "  •  ", "list")
+        w.insert("end", "  \u2022  ", "list")
         _insert_inline(w, m.group(1), "list")
         w.insert("end", "\n")
         return
@@ -129,28 +135,45 @@ def _render_line(w, line, _line_num):
 def render(text_widget, markdown_text):
     text_widget.configure(state="normal")
     text_widget.delete("1.0", "end")
+    text_widget.configure(font=("TkDefaultFont", 10))
     _tag_cfg(text_widget)
 
     lines = markdown_text.split("\n")
     in_fm = False
     in_code = False
+    code_lines = []
+
+    def flush_code():
+        if code_lines:
+            text = "\n".join(code_lines) + "\n"
+            text_widget.insert("end", text, "codeblock")
+            code_lines.clear()
 
     for line in lines:
         s = line.strip()
 
-        if s == "---" and not in_code:
+        if s == "---":
+            flush_code()
+            text_widget.insert("end", "\n")
             in_fm = not in_fm
             continue
 
         if FENCE_RE.match(s):
-            in_code = not in_code
+            if in_code:
+                flush_code()
+                in_code = False
+            else:
+                in_code = True
             continue
 
         if in_fm:
+            flush_code()
             _insert_line(text_widget, line, "frontmatter")
         elif in_code:
-            _insert_line(text_widget, line, "codeblock")
+            code_lines.append(line)
         else:
-            _render_line(text_widget, line, 0)
+            flush_code()
+            _render_line(text_widget, line)
 
+    flush_code()
     text_widget.configure(state="disabled")
