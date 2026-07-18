@@ -55,12 +55,12 @@ class WorkflowApp:
         self._refresh_agent_list()
         self._poll_log_queue()
 
+        if workflow_path:
+            self._load_workflow_from_path(workflow_path)
         if workdir:
             self._workdir_var.set(workdir)
         if init_script:
             self._init_script_var.set(init_script)
-        if workflow_path:
-            self._load_workflow_from_path(workflow_path)
         self._update_title()
 
     # ---- Public API ----
@@ -450,8 +450,10 @@ class WorkflowApp:
         self._finalize_on_abort_var.set(
             bool(data.get("finalize_on_abort", False))
         )
-        self._workdir_var.set(data.get("workdir", "") or "")
-        self._init_script_var.set(data.get("init_script", "") or "")
+        if "workdir" in data:
+            self._workdir_var.set(data["workdir"] or "")
+        if "init_script" in data:
+            self._init_script_var.set(data["init_script"] or "")
 
     def _load_workflow_from_path(self, path: str) -> None:
         try:
