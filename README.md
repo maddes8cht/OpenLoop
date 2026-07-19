@@ -77,6 +77,42 @@ A workflow in OpenLoop consists of three distinct phases:
    - Evaluates the `end_state_condition` (e.g., `is_complete == True` or `payload.get('coverage', 0) >= 80`) after each agent.
 3. **Finalization Phase (Optional):** Runs once at the end. Supports one or multiple agents executed in sequence. You can configure whether it runs only on successful completion (`finalize_on_abort: false`), or also if the loop was aborted due to hitting `max_loops` (`finalize_on_abort: true`).
 
+### 4. The State Lifecycle (Step by Step)
+
+Every agent invocation follows the same six-step cycle:
+
+```
+                    ┌──────────────────────────────────────┐
+                    │         ExecutionEngine              │
+                    │                                      │
+                    │  ┌──────────┐     ┌──────────────┐  │
+                    │  │Workflow  │────►│ serialize to  │  │
+                    │  │State     │     │ JSON          │  │
+                    │  └───┬──────┘     └──────┬────────┘  │
+                    │      │                   │           │
+                    │      │  merge()    append to prompt  │
+                    │      │                   │           │
+                    │  ┌───▼──────┐     ┌──────▼────────┐  │
+                    │  │ parse()  │◄────│  opencode run │  │
+                    │  │<state_   │     │  (LLM sub-    │  │
+                    │  │ update>  │     │  process)     │  │
+                    │  └──────────┘     └───────────────┘  │
+                    │                                      │
+                    │  eval(end_state_condition) ──► loop  │
+                    │                               or    │
+                    │                              stop   │
+                    └──────────────────────────────────────┘
+```
+
+1. **Serialize** — The engine serializes the current `WorkflowState` to a JSON string via `state.to_json()`.
+2. **Inject** — The JSON is appended to the agent's system prompt under a `# Current State` heading (see `_build_prompt()` in `core/engine.py`).
+3. **Execute** — The full prompt is sent to `opencode run`, which spawns a headless LLM subprocess in a fresh, isolated context.
+4. **Parse** — After the subprocess returns, `StateParser.extract_state_update()` (in `core/parser.py`) scans stdout for a `<state_update>` XML tag (preferred) or a JSON code block (fallback).
+5. **Merge** — The parsed key-value pairs are merged into the shared `WorkflowState` via `state.merge()`. Only keys present in the update are changed; the `payload` dict is merged deeply.
+6. **Evaluate** — The `end_state_condition` is evaluated. If true, the loop terminates. Otherwise, the next agent in the sequence starts at step 1 with the updated state.
+
+The same cycle applies in all three phases. During the loop phase, the `iteration` counter is incremented before each full pass through the agent sequence.
+
 ---
 
 ## Documentation

@@ -3,6 +3,41 @@
 The shared state is the "single source of truth" in OpenLoop.  
 It is represented by the `WorkflowState` dataclass and passed between agents as JSON.
 
+## State Lifecycle
+
+The state flows through the system in a continuous six-step cycle:
+
+```
+                    ┌──────────────────────────────────────┐
+                    │         ExecutionEngine              │
+                    │                                      │
+                    │  ┌──────────┐     ┌──────────────┐  │
+                    │  │Workflow  │────►│ serialize to  │  │
+                    │  │State     │     │ JSON          │  │
+                    │  └───┬──────┘     └──────┬────────┘  │
+                    │      │                   │           │
+                    │      │  merge()    append to prompt  │
+                    │      │                   │           │
+                    │  ┌───▼──────┐     ┌──────▼────────┐  │
+                    │  │ parse()  │◄────│  opencode run │  │
+                    │  │<state_   │     │  (LLM sub-    │  │
+                    │  │ update>  │     │  process)     │  │
+                    │  └──────────┘     └───────────────┘  │
+                    │                                      │
+                    │  eval(end_state_condition) ──► next  │
+                    │                               agent  │
+                    └──────────────────────────────────────┘
+```
+
+1. **Serialize** — `WorkflowState.to_json()` produces a JSON representation of the current state.
+2. **Inject** — The engine appends this JSON to the agent's system prompt as a markdown code block under `# Current State` (see `_build_prompt()` in `core/engine.py`).
+3. **Execute** — The prompt is passed to `opencode run`, which invokes the LLM in a fresh, isolated context.
+4. **Extract** — `StateParser.extract_state_update()` (in `core/parser.py`) searches the LLM's stdout for `<state_update>...</state_update>` (preferred) or a JSON code block (fallback).
+5. **Merge** — The parsed dict is applied to `WorkflowState` via `merge()`. Only keys present in the update are changed; the `payload` dict is merged deeply.
+6. **Evaluate** — After each agent, the engine evaluates `end_state_condition`. If true, the loop exits. Otherwise, the next agent in the sequence sees the updated state.
+
+The same cycle applies in all three phases (preparation, loop, finalization). In the loop phase, the `iteration` counter is incremented before each full pass through the agent sequence.
+
 ## Fields
 
 | Field | Type | Default | Description |

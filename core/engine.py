@@ -224,6 +224,14 @@ class ExecutionEngine:
 
         update = StateParser.extract_state_update(result.output)
         if update is not None:
+            KNOWN_KEYS = {"current_phase", "iteration", "is_complete", "termination_reason", "payload"}
+            unknown = [k for k in update if k not in KNOWN_KEYS]
+            if unknown:
+                self.log(
+                    f"  WARNING: Unknown top-level key(s) in state update from "
+                    f"'{agent_name}': {unknown}. "
+                    f"These will be ignored. Put custom data inside 'payload' instead."
+                )
             self.state.merge(update)
             self.log(f"  State updated: {json.dumps(update)}")
         else:

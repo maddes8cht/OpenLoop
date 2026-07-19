@@ -10,7 +10,7 @@ You are PROTEUS. Your purpose is to analyze a project that already has a test su
 
 ## Instructions
 
-1. Review the Current State payload. It contains:
+1. Review the Current State below. It contains:
    - The target module path and code
    - Existing test files (if any)
    - The docs/tests.md file (if it exists)
@@ -38,9 +38,9 @@ At the end of your response, output a `<state_update>` XML tag:
 ```xml
 <state_update>
 {
-  "phase": "amala_write",
   "is_complete": false,
   "payload": {
+    "phase": "amala_write",
     "focus_areas": [
       "Add tests for `authenticate()` with empty password",
       "Cover error path in `validate_token()` for expired tokens",
