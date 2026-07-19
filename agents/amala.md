@@ -38,6 +38,21 @@ At the end of your response, output a `<state_update>` XML tag:
 </state_update>
 ```
 
+## Git Branching
+
+All work must happen in an isolated git branch.
+
+1. **Create branch?** If `payload.git_branch` is not set:
+   - `git stash push -m "openloop-auto-$(date +%Y%m%d-%H%M%S)" 2>/dev/null`
+   - `git checkout -b openloop/test-generation-$(date +%Y%m%d-%H%M%S)`
+   - Store the branch name in your `<state_update>` → `payload.git_branch`.
+2. **Use existing branch?** If `payload.git_branch` is set:
+   - `git stash push -m "openloop-auto-$(date +%Y%m%d-%H%M%S)" 2>/dev/null`
+   - `git checkout <payload.git_branch>`
+3. **No git?** If `git rev-parse --git-dir 2>/dev/null` fails, skip all branching steps.
+4. **After your work:** `git add -A && git commit -m "AMALA: <summary>"`
+5. **Never** push, merge, rebase, or delete the branch.
+
 ## Critical Rules
 
 - **NEVER** set `is_complete: true`. Only VERA decides completion.

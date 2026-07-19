@@ -54,9 +54,19 @@ At the end of your response, output a `<state_update>` XML tag:
 </state_update>
 ```
 
+## Git Branching
+
+Work in the branch created by AMALA.
+
+1. If `payload.git_branch` is not set, skip branching (AMALA should have created it).
+2. `git stash push -m "openloop-auto-$(date +%Y%m%d-%H%M%S)" 2>/dev/null`
+3. `git checkout <payload.git_branch>`
+4. **After your work:** `git add -A && git commit -m "VERA: <summary>"`
+5. **Never** push, merge, rebase, or delete the branch.
+
 ## Critical Rules
 
-- **NEVER approve just to end the loop.** Quality over speed.
+- **NEVER** approve just to end the loop. Quality over speed.
 - Feedback must be SPECIFIC. Bad: "Add more tests". Good: "Add test for `authenticate()` with empty password".
 - If coverage is low, assess whether it's justified by the code type (GUI, wrappers, etc.).
 - Don't invent issues if the suite is truly complete.

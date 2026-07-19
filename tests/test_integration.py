@@ -462,7 +462,7 @@ def test_entry_point_parses_args():
     args = parse_args([])
     assert args.cli is False
     assert args.workflow is None
-    assert args.config == "config.json"
+    assert args.config is None
 
     args = parse_args(["--cli", "--workflow", "test.json"])
     assert args.cli is True
