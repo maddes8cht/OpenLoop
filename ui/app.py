@@ -11,6 +11,7 @@ from tkinter import (
     W,
     E,
     HORIZONTAL,
+    VERTICAL,
     BooleanVar,
     Button,
     Checkbutton,
@@ -55,6 +56,7 @@ class WorkflowApp:
 
         self._build_ui()
         self._root.after_idle(self._init_preview_collapsed)
+        self._root.after_idle(self._init_log_collapsed)
         self._load_config()
         self._refresh_agent_list()
         self._poll_log_queue()
@@ -119,9 +121,14 @@ class WorkflowApp:
         self._preview_toggle_btn = Button(toolbar, text="Preview ▼", width=8, command=self._toggle_preview)
         self._preview_toggle_btn.pack(side=LEFT, padx=2)
 
-        # Main content area
-        content = Frame(self._root)
-        content.grid(row=1, column=0, sticky=(N, S, W, E), padx=4, pady=2)
+        # Main content area + Log in a vertical PanedWindow
+        self._root_paned = ttk.PanedWindow(self._root, orient=VERTICAL)
+        self._root_paned.grid(row=1, column=0, sticky=(N, S, W, E), padx=4, pady=2)
+        self._log_ratio = None
+        self._root_paned.bind("<ButtonRelease-1>", self._on_log_sash_drag)
+
+        # Top pane: Content (Agent Pool + Builder + Preview)
+        content = Frame(self._root_paned)
         content.columnconfigure(0, weight=0)
         content.columnconfigure(1, weight=1)
         content.rowconfigure(0, weight=1)
@@ -311,9 +318,11 @@ class WorkflowApp:
         self._main_paned.add(self._preview_frame, weight=1)
         # Collapse preview on first idle event (after layout is complete)
 
-        # Bottom: Log
+        self._root_paned.add(content, weight=3)
+
+        # Bottom: Log (always in paned window, collapsed via sash position)
         self._log_frame = ttk.LabelFrame(
-            self._root, text="Execution Log", padding=4
+            self._root_paned, text="Execution Log", padding=4
         )
         self._log_frame.rowconfigure(0, weight=1)
         self._log_frame.columnconfigure(0, weight=1)
@@ -327,11 +336,7 @@ class WorkflowApp:
         self._log_text.grid(row=0, column=0, sticky=(N, S, W, E))
         log_scroll.grid(row=0, column=1, sticky=(N, S))
 
-        if not self._log_collapsed.get():
-            self._log_frame.grid(
-                row=2, column=0, sticky=(N, S, W, E), padx=4, pady=2
-            )
-        self._root.rowconfigure(2, weight=0)
+        self._root_paned.add(self._log_frame, weight=1)
 
     def _build_zone(
         self,
@@ -731,17 +736,60 @@ class WorkflowApp:
 
     def _toggle_log(self) -> None:
         if self._log_collapsed.get():
-            self._log_frame.grid(
-                row=2, column=0, sticky=(N, S, W, E), padx=4, pady=2
-            )
-            self._root.rowconfigure(2, weight=1)
             self._log_collapsed.set(False)
             self._log_toggle_btn.configure(text="Log ▲")
+            self._restore_log_ratio()
         else:
-            self._log_frame.grid_remove()
-            self._root.rowconfigure(2, weight=0)
+            self._save_log_ratio()
             self._log_collapsed.set(True)
             self._log_toggle_btn.configure(text="Log ▼")
+            self._collapse_log()
+
+    def _init_log_collapsed(self) -> None:
+        self._log_ratio = None
+        self._collapse_log()
+
+    def _save_log_ratio(self) -> None:
+        total = self._root_paned.winfo_height()
+        if total > 50:
+            pos = self._root_paned.sashpos(0)
+            if 50 < pos < total - 50:
+                self._log_ratio = pos / total
+
+    def _restore_log_ratio(self) -> None:
+        if self._log_collapsed.get():
+            return
+        self._root_paned.update_idletasks()
+        total = self._root_paned.winfo_height()
+        if total < 50:
+            self._root_paned.after(20, self._restore_log_ratio)
+            return
+        if self._log_ratio is not None:
+            pos = int(total * self._log_ratio)
+        else:
+            pos = int(total * 0.7)
+        if pos < 100:
+            pos = int(total * 0.7)
+        if pos > total - 20:
+            pos = int(total * 0.7)
+        self._root_paned.sashpos(0, pos)
+
+    def _collapse_log(self) -> None:
+        if not self._log_collapsed.get():
+            return
+        self._root_paned.update_idletasks()
+        total = self._root_paned.winfo_height()
+        if total < 50:
+            self._root_paned.after(20, self._collapse_log)
+            return
+        self._root_paned.sashpos(0, total - 2)
+
+    def _on_log_sash_drag(self, event) -> None:
+        total = self._root_paned.winfo_height()
+        if total > 50:
+            pos = self._root_paned.sashpos(0)
+            if 50 < pos < total - 50:
+                self._log_ratio = pos / total
 
     def _toggle_preview(self) -> None:
         if self._preview_collapsed.get():
