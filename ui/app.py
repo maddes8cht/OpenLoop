@@ -14,6 +14,7 @@ from tkinter import (
     VERTICAL,
     BooleanVar,
     Button,
+    Canvas,
     Checkbutton,
     Entry,
     Frame,
@@ -33,11 +34,18 @@ from typing import Optional
 class CollapsibleFrame(ttk.Frame):
     """A frame with a toggle button that shows/hides its body.
 
+    When expanded a horizontal Toolbutton with ``▼ {title}`` is shown.
+    When collapsed the button is replaced by a narrow Canvas that
+    draws the title rotated 270° (top-to-bottom) — click anywhere on
+    the canvas to restore the column.
+
     Designed for use in a grid layout.  When collapsed the parent
     frame's column weight is set to ``collapse_weight`` so the freed
     horizontal space is redistributed to sibling columns.  When
     expanded the weight reverts to ``expand_weight``.
     """
+
+    _CANVAS_W = 24
 
     def __init__(
         self,
@@ -63,24 +71,12 @@ class CollapsibleFrame(ttk.Frame):
             style="Toolbutton",
         )
         self._toggle_btn.pack(anchor="w", fill="x")
+        self._toggle_canvas: Optional[Canvas] = None
+        self._title_canvas_id: Optional[int] = None
         self._body = ttk.Frame(self)
         self._body.pack(fill="both", expand=True)
 
-    def _toggle(self) -> None:
-        if self._body.winfo_manager():
-            self._body.pack_forget()
-            self._toggle_btn.configure(text=f"▶ {self._title}")
-            self._collapsed = True
-            self._parent.columnconfigure(
-                self._col, weight=self._collapse_weight
-            )
-        else:
-            self._body.pack(fill="both", expand=True)
-            self._toggle_btn.configure(text=f"▼ {self._title}")
-            self._collapsed = False
-            self._parent.columnconfigure(
-                self._col, weight=self._expand_weight
-            )
+    # ---- public api ----
 
     @property
     def body(self):
@@ -89,6 +85,64 @@ class CollapsibleFrame(ttk.Frame):
     @property
     def is_collapsed(self):
         return self._collapsed
+
+    # ---- toggle ----
+
+    def _toggle(self) -> None:
+        if self._body.winfo_manager():
+            self._collapse()
+        else:
+            self._expand()
+
+    def _collapse(self) -> None:
+        self._body.pack_forget()
+        self._toggle_btn.pack_forget()
+        if self._toggle_canvas is None:
+            self._toggle_canvas = Canvas(
+                self,
+                width=self._CANVAS_W,
+                highlightthickness=0,
+            )
+            self._toggle_canvas.create_text(
+                self._CANVAS_W // 4,
+                4,
+                text="▶",
+                anchor="n",
+                font=("", 13, "bold"),
+            )
+            self._title_canvas_id = self._toggle_canvas.create_text(
+                self._CANVAS_W // 3,
+                50,
+                text=self._title,
+                angle=90,
+                anchor="center",
+                font=("", 9),
+            )
+            self._toggle_canvas.bind(
+                "<Button-1>", lambda e: self._toggle()
+            )
+        self._toggle_canvas.pack(fill="both", expand=True, side=LEFT)
+        # centre title vertically after layout
+        self._toggle_canvas.update_idletasks()
+        h = self._toggle_canvas.winfo_height()
+        if h > 30:
+            self._toggle_canvas.coords(
+                self._title_canvas_id, self._CANVAS_W // 2, h // 2
+            )
+        self._collapsed = True
+        self._parent.columnconfigure(
+            self._col, weight=self._collapse_weight
+        )
+
+    def _expand(self) -> None:
+        if self._toggle_canvas:
+            self._toggle_canvas.pack_forget()
+        self._toggle_btn.pack(anchor="w", fill="x")
+        self._body.pack(fill="both", expand=True)
+        self._collapsed = False
+        self._parent.columnconfigure(
+            self._col, weight=self._expand_weight
+        )
 
 
 class WorkflowApp:
@@ -117,6 +171,7 @@ class WorkflowApp:
 
         self._build_ui()
         self._root.after_idle(self._init_log_collapsed)
+        self._root.after_idle(self._init_preview_collapsed)
         self._load_config()
         self._refresh_agent_list()
         self._poll_log_queue()
@@ -188,30 +243,37 @@ class WorkflowApp:
         self._log_ratio = None
         self._root_paned.bind("<ButtonRelease-1>", self._on_log_sash_drag)
 
-        # 4 collapsible columns in a grid layout
+        # 3 collapsible columns in a grid layout
         columns_frame = Frame(self._root_paned)
-        columns_frame.columnconfigure(0, weight=0)
-        columns_frame.columnconfigure(1, weight=2)
-        columns_frame.columnconfigure(2, weight=0)
-        columns_frame.columnconfigure(3, weight=1)
+        columns_frame.columnconfigure(0, weight=2)  # Agents (two sub-columns)
+        columns_frame.columnconfigure(1, weight=0)  # Settings (fixed width)
+        columns_frame.columnconfigure(2, weight=1)  # Preview (flexible)
         columns_frame.rowconfigure(0, weight=1)
 
-        # ---- Column 0: Agent Pool (fixed width) ----
-        pool = CollapsibleFrame(
-            columns_frame, text="Agent Pool",
-            column_index=0, expand_weight=0, collapse_weight=0,
+        # ---- Column 0: Agents (Agent Pool + Flow Zones combined) ----
+        agents = CollapsibleFrame(
+            columns_frame, text="Agents",
+            column_index=0, expand_weight=2, collapse_weight=0,
         )
-        pool.grid(row=0, column=0, sticky=(N, S, W, E), padx=(0, 2))
-        self._pool_collapsible = pool
-        pool_inner = Frame(pool.body)
-        pool_inner.pack(fill="both", expand=True)
-        pool_inner.columnconfigure(0, weight=1)
-        pool_inner.rowconfigure(0, weight=1)
+        agents.grid(row=0, column=0, sticky=(N, S, W, E), padx=(0, 2))
+        self._agents_collapsible = agents
 
-        self._agent_listbox = Listbox(pool_inner, width=22)
+        agents_inner = Frame(agents.body)
+        agents_inner.pack(fill="both", expand=True)
+        agents_inner.columnconfigure(0, weight=1)  # Agent Pool
+        agents_inner.columnconfigure(1, weight=1)  # Flow Zones
+        agents_inner.rowconfigure(0, weight=1)
+
+        # Sub-column 0: Agent Pool
+        pool_frame = Frame(agents_inner)
+        pool_frame.grid(row=0, column=0, sticky=(N, S, W, E), padx=(0, 1))
+        pool_frame.columnconfigure(0, weight=1)
+        pool_frame.rowconfigure(0, weight=1)
+
+        self._agent_listbox = Listbox(pool_frame, width=22)
         self._agent_listbox.grid(row=0, column=0, sticky=(N, S, W, E), pady=2)
         agent_scroll = Scrollbar(
-            pool_inner, command=self._agent_listbox.yview
+            pool_frame, command=self._agent_listbox.yview
         )
         self._agent_listbox.configure(yscrollcommand=agent_scroll.set)
         agent_scroll.grid(row=0, column=1, sticky=(N, S))
@@ -220,7 +282,7 @@ class WorkflowApp:
             lambda e: self._show_preview(self._agent_listbox),
         )
 
-        agent_btn_frame = Frame(pool_inner)
+        agent_btn_frame = Frame(pool_frame)
         agent_btn_frame.grid(row=1, column=0, columnspan=2, pady=2)
         Button(
             agent_btn_frame,
@@ -241,34 +303,28 @@ class WorkflowApp:
             command=lambda: self._add_to_zone("final"),
         ).pack(side=LEFT, padx=1)
 
-        # ---- Column 1: Flow Zones (flexible) ----
-        flow = CollapsibleFrame(
-            columns_frame, text="Flow Zones",
-            column_index=1, expand_weight=2, collapse_weight=0,
-        )
-        flow.grid(row=0, column=1, sticky=(N, S, W, E), padx=2)
-        self._flow_collapsible = flow
-        flow_inner = Frame(flow.body)
-        flow_inner.pack(fill="both", expand=True)
-        flow_inner.columnconfigure(0, weight=1)
-        flow_inner.rowconfigure(0, weight=0)
-        flow_inner.rowconfigure(1, weight=1)
-        flow_inner.rowconfigure(2, weight=0)
+        # Sub-column 1: Flow Zones
+        flow_frame = Frame(agents_inner)
+        flow_frame.grid(row=0, column=1, sticky=(N, S, W, E), padx=(1, 0))
+        flow_frame.columnconfigure(0, weight=1)
+        flow_frame.rowconfigure(0, weight=0)
+        flow_frame.rowconfigure(1, weight=1)
+        flow_frame.rowconfigure(2, weight=0)
 
         self._build_zone(
-            flow_inner, "Preparation Agent", "prep", 0, listbox_height=4
+            flow_frame, "Preparation Agent", "prep", 0, listbox_height=4
         )
-        self._build_zone(flow_inner, "Loop Agents", "loop", 1)
+        self._build_zone(flow_frame, "Loop Agents", "loop", 1)
         self._build_zone(
-            flow_inner, "Finalization Agent", "final", 2, listbox_height=4
+            flow_frame, "Finalization Agent", "final", 2, listbox_height=4
         )
 
-        # ---- Column 2: Settings (fixed width) ----
+        # ---- Column 1: Settings (fixed width) ----
         settings = CollapsibleFrame(
             columns_frame, text="Settings",
-            column_index=2, expand_weight=0, collapse_weight=0,
+            column_index=1, expand_weight=0, collapse_weight=0,
         )
-        settings.grid(row=0, column=2, sticky=(N, S, W, E), padx=2)
+        settings.grid(row=0, column=1, sticky=(N, S, W, E), padx=2)
         self._settings_collapsible = settings
         settings_inner = Frame(settings.body)
         settings_inner.pack(fill="both", expand=True)
@@ -377,12 +433,12 @@ class WorkflowApp:
             variable=self._oc_pure_var,
         ).grid(row=13, column=0, columnspan=2, sticky=W, pady=2)
 
-        # ---- Column 3: Preview / Output (tabbed, flexible) ----
+        # ---- Column 2: Preview / Output (tabbed, flexible) ----
         preview = CollapsibleFrame(
             columns_frame, text="Preview / Output",
-            column_index=3, expand_weight=1, collapse_weight=0,
+            column_index=2, expand_weight=1, collapse_weight=0,
         )
-        preview.grid(row=0, column=3, sticky=(N, S, W, E), padx=(2, 0))
+        preview.grid(row=0, column=2, sticky=(N, S, W, E), padx=(2, 0))
         self._preview_collapsible = preview
 
         notebook = ttk.Notebook(preview.body)
@@ -867,6 +923,10 @@ class WorkflowApp:
     def _init_log_collapsed(self) -> None:
         self._log_ratio = None
         self._collapse_log()
+
+    def _init_preview_collapsed(self) -> None:
+        if not self._preview_collapsible.is_collapsed:
+            self._preview_collapsible._toggle()
 
     def _save_log_ratio(self) -> None:
         total = self._root_paned.winfo_height()
