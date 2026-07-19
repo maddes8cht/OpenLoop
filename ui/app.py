@@ -10,6 +10,7 @@ from tkinter import (
     S,
     W,
     E,
+    HORIZONTAL,
     BooleanVar,
     Button,
     Checkbutton,
@@ -39,8 +40,8 @@ class WorkflowApp:
     ) -> None:
         self._root = Tk()
         self._root.title("OpenLoop — Workflow Builder")
-        self._root.geometry("1100x700")
-        self._root.minsize(1000, 800)
+        self._root.geometry("1024x720")
+        self._root.minsize(1024, 600)
 
         self._config_path = config_path
         self._config = None
@@ -53,6 +54,7 @@ class WorkflowApp:
         self._opencode_defaults_raw = opencode_defaults_raw
 
         self._build_ui()
+        self._root.after_idle(self._init_preview_collapsed)
         self._load_config()
         self._refresh_agent_list()
         self._poll_log_queue()
@@ -109,13 +111,22 @@ class WorkflowApp:
         )
         self._stop_btn.pack(side=LEFT, padx=2)
 
+        self._log_collapsed = BooleanVar(value=True)
+        self._log_toggle_btn = Button(toolbar, text="Log ▼", width=6, command=self._toggle_log)
+        self._log_toggle_btn.pack(side=LEFT, padx=2)
+
+        self._preview_collapsed = BooleanVar(value=True)
+        self._preview_toggle_btn = Button(toolbar, text="Preview ▼", width=8, command=self._toggle_preview)
+        self._preview_toggle_btn.pack(side=LEFT, padx=2)
+
         # Main content area
         content = Frame(self._root)
         content.grid(row=1, column=0, sticky=(N, S, W, E), padx=4, pady=2)
-        content.columnconfigure(2, weight=1)
+        content.columnconfigure(0, weight=0)
+        content.columnconfigure(1, weight=1)
         content.rowconfigure(0, weight=1)
 
-        # Column 0: Agent Pool
+        # Column 0: Agent Pool (fixed-ish width)
         agent_frame = ttk.LabelFrame(content, text="Agent Pool", padding=4)
         agent_frame.grid(row=0, column=0, sticky=(N, S, W), padx=2)
         agent_frame.rowconfigure(0, weight=1)
@@ -148,13 +159,21 @@ class WorkflowApp:
             command=lambda: self._add_to_zone("final"),
         ).pack(side=LEFT, padx=1)
 
-        # Column 1: Workflow Builder
-        builder = Frame(content)
-        builder.grid(row=0, column=1, sticky=(N, S, W, E), padx=2)
+        # Column 1: Workflow Builder + Preview in a PanedWindow (horizontal)
+        self._main_paned = ttk.PanedWindow(content, orient=HORIZONTAL)
+        self._main_paned.grid(row=0, column=1, sticky=(N, S, W, E), padx=2)
+        self._preview_ratio = None
+        self._main_paned.bind("<ButtonRelease-1>", self._on_sash_drag)
+
+        # Left pane: Workflow Builder
+        builder = Frame(self._main_paned)
         builder.columnconfigure(0, weight=1)
         builder.rowconfigure(0, weight=0)
         builder.rowconfigure(1, weight=1)
         builder.rowconfigure(2, weight=0)
+        builder.rowconfigure(3, weight=0)
+
+        self._main_paned.add(builder, weight=3)
 
         self._build_zone(
             builder, "Preparation Agent", "prep", 0, listbox_height=4
@@ -271,15 +290,14 @@ class WorkflowApp:
         ).grid(row=row, column=0, columnspan=2, sticky=W, pady=2)
         row += 1
 
-        # Column 2: Agent Preview
-        preview_frame = ttk.LabelFrame(content, text="Agent Preview", padding=4)
-        preview_frame.grid(row=0, column=2, sticky=(N, S, W, E), padx=2)
-        preview_frame.rowconfigure(0, weight=1)
-        preview_frame.columnconfigure(0, weight=1)
+        # Right pane: Agent Preview (always added to paned window)
+        self._preview_frame = ttk.LabelFrame(self._main_paned, text="Agent Preview", padding=4)
+        self._preview_frame.rowconfigure(0, weight=1)
+        self._preview_frame.columnconfigure(0, weight=1)
 
-        self._preview_text = Text(preview_frame, wrap="word", state="disabled")
+        self._preview_text = Text(self._preview_frame, wrap="word", state="disabled")
         preview_scroll = Scrollbar(
-            preview_frame, command=self._preview_text.yview
+            self._preview_frame, command=self._preview_text.yview
         )
         self._preview_text.configure(yscrollcommand=preview_scroll.set)
 
@@ -290,24 +308,30 @@ class WorkflowApp:
         self._preview_text.insert("1.0", "Select an agent to preview")
         self._preview_text.configure(state="disabled")
 
+        self._main_paned.add(self._preview_frame, weight=1)
+        # Collapse preview on first idle event (after layout is complete)
+
         # Bottom: Log
-        log_frame = ttk.LabelFrame(
+        self._log_frame = ttk.LabelFrame(
             self._root, text="Execution Log", padding=4
         )
-        log_frame.grid(
-            row=2, column=0, sticky=(N, S, W, E), padx=4, pady=2
-        )
-        log_frame.rowconfigure(0, weight=1)
-        log_frame.columnconfigure(0, weight=1)
+        self._log_frame.rowconfigure(0, weight=1)
+        self._log_frame.columnconfigure(0, weight=1)
 
         self._log_text = Text(
-            log_frame, height=10, wrap="word", state="disabled"
+            self._log_frame, height=10, wrap="word", state="disabled"
         )
-        log_scroll = Scrollbar(log_frame, command=self._log_text.yview)
+        log_scroll = Scrollbar(self._log_frame, command=self._log_text.yview)
         self._log_text.configure(yscrollcommand=log_scroll.set)
 
         self._log_text.grid(row=0, column=0, sticky=(N, S, W, E))
         log_scroll.grid(row=0, column=1, sticky=(N, S))
+
+        if not self._log_collapsed.get():
+            self._log_frame.grid(
+                row=2, column=0, sticky=(N, S, W, E), padx=4, pady=2
+            )
+        self._root.rowconfigure(2, weight=0)
 
     def _build_zone(
         self,
@@ -704,3 +728,74 @@ class WorkflowApp:
                 self._log_text.configure(state="disabled")
 
         self._root.after(100, self._poll_log_queue)
+
+    def _toggle_log(self) -> None:
+        if self._log_collapsed.get():
+            self._log_frame.grid(
+                row=2, column=0, sticky=(N, S, W, E), padx=4, pady=2
+            )
+            self._root.rowconfigure(2, weight=1)
+            self._log_collapsed.set(False)
+            self._log_toggle_btn.configure(text="Log ▲")
+        else:
+            self._log_frame.grid_remove()
+            self._root.rowconfigure(2, weight=0)
+            self._log_collapsed.set(True)
+            self._log_toggle_btn.configure(text="Log ▼")
+
+    def _toggle_preview(self) -> None:
+        if self._preview_collapsed.get():
+            self._preview_collapsed.set(False)
+            self._preview_toggle_btn.configure(text="Preview ▲")
+            self._restore_preview_ratio()
+        else:
+            self._save_preview_ratio()
+            self._preview_collapsed.set(True)
+            self._preview_toggle_btn.configure(text="Preview ▼")
+            self._collapse_preview()
+
+    def _init_preview_collapsed(self) -> None:
+        self._preview_ratio = None
+        self._collapse_preview()
+
+    def _save_preview_ratio(self) -> None:
+        total = self._main_paned.winfo_width()
+        if total > 50:
+            pos = self._main_paned.sashpos(0)
+            if 50 < pos < total - 50:
+                self._preview_ratio = pos / total
+
+    def _restore_preview_ratio(self) -> None:
+        if self._preview_collapsed.get():
+            return
+        self._main_paned.update_idletasks()
+        total = self._main_paned.winfo_width()
+        if total < 50:
+            self._main_paned.after(20, self._restore_preview_ratio)
+            return
+        if self._preview_ratio is not None:
+            pos = int(total * self._preview_ratio)
+        else:
+            pos = int(total * 0.75)
+        if pos < 150:
+            pos = int(total * 0.75)
+        if pos > total - 10:
+            pos = int(total * 0.75)
+        self._main_paned.sashpos(0, pos)
+
+    def _collapse_preview(self) -> None:
+        if not self._preview_collapsed.get():
+            return
+        self._main_paned.update_idletasks()
+        total = self._main_paned.winfo_width()
+        if total < 50:
+            self._main_paned.after(20, self._collapse_preview)
+            return
+        self._main_paned.sashpos(0, total - 2)
+
+    def _on_sash_drag(self, event) -> None:
+        total = self._main_paned.winfo_width()
+        if total > 50:
+            pos = self._main_paned.sashpos(0)
+            if 50 < pos < total - 50:
+                self._preview_ratio = pos / total
