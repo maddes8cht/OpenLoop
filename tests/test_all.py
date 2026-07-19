@@ -1035,6 +1035,75 @@ class TestExecutionEngine:
         )
         assert state.termination_reason == "agent_error:a"
 
+    def test_prep_agent_error_aborts_before_loop(self):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+        engine.runner = self._make_mock_runner(
+            [
+                {"success": False, "output": ""},
+            ]
+        )
+        engine.agent_loader = self._make_mock_agent_loader(
+            {"p": "Prep", "a": "Loop"}
+        )
+        state = engine.execute_workflow_data(
+            {
+                "preparation_agents": ["p"],
+                "loop_agents": ["a"],
+                "max_loops": 5,
+                "end_state_condition": "is_complete == True",
+            }
+        )
+        assert state.termination_reason == "agent_error:p"
+        assert state.iteration == 0
+
+    def test_multiple_prep_agents_stop_on_first_error(self):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+        engine.runner = self._make_mock_runner(
+            [
+                {"success": False, "output": ""},
+                {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+            ]
+        )
+        engine.agent_loader = self._make_mock_agent_loader(
+            {"p1": "Prep", "p2": "Prep"}
+        )
+        state = engine.execute_workflow_data(
+            {
+                "preparation_agents": ["p1", "p2"],
+                "loop_agents": [],
+                "end_state_condition": "is_complete == True",
+            }
+        )
+        assert state.termination_reason == "agent_error:p1"
+        assert engine.runner.run.call_count == 1
+
+    def test_loop_multiple_agents_stop_on_first_error(self):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+        engine.runner = self._make_mock_runner(
+            [
+                {"success": False, "output": ""},
+            ]
+        )
+        engine.agent_loader = self._make_mock_agent_loader(
+            {"a": "Agent", "b": "Agent"}
+        )
+        state = engine.execute_workflow_data(
+            {
+                "loop_agents": ["a", "b"],
+                "max_loops": 1,
+                "end_state_condition": "is_complete == True",
+            }
+        )
+        assert state.termination_reason == "agent_error:a"
+        assert state.iteration == 1
+        assert engine.runner.run.call_count == 1
+
     def test_malformed_agent_output_no_crash(self):
         from core.engine import ExecutionEngine
 

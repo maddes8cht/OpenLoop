@@ -133,7 +133,11 @@ class ExecutionEngine:
         )
 
         self._run_preparation(workflow)
+        if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+            return self.state
         self._run_loop(workflow)
+        if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+            return self.state
         self._run_finalization(workflow)
 
         return self.state
@@ -147,6 +151,8 @@ class ExecutionEngine:
         for agent_name in workflow.preparation_agents:
             self.log(f"Preparation phase: {agent_name}")
             self._execute_agent(agent_name)
+            if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+                return
 
     def _run_loop(self, workflow: WorkflowConfig) -> None:
         if not workflow.loop_agents:
@@ -155,6 +161,8 @@ class ExecutionEngine:
             return
 
         self.state.current_phase = "loop"
+        if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+            return
         while self.state.iteration < workflow.max_loops:
             if self._stop_event.is_set():
                 self.state.termination_reason = "stopped"
