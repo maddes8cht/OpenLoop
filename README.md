@@ -121,7 +121,7 @@ Detailed reference documentation is available in the [`docs/`](./docs/) director
 
 | Document | Description |
 |---|---|
-| [Agents](./docs/agents.md) | Agent file format, frontmatter fields, system prompt conventions |
+| [Agent Definitions](./docs/agent-definitions.md) | Agent file format, frontmatter fields, system prompt conventions, best practices |
 | [Workflows](./docs/workflows.md) | Workflow JSON schema, slot configuration, `end_state_condition` syntax |
 | [CLI](./docs/cli.md) | Complete CLI reference, flags, exit codes, examples |
 | [Configuration](./docs/configuration.md) | `openloop.json` schema (JSONC with `//` and `/* */` comments), field descriptions, search order, override priority |
