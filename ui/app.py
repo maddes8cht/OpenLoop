@@ -31,10 +31,11 @@ from typing import Optional
 class WorkflowApp:
     def __init__(
         self,
-        config_path: str = "config.json",
+        config_path: Optional[str] = None,
         workflow_path: Optional[str] = None,
         workdir: Optional[str] = None,
         init_script: Optional[str] = None,
+        opencode_defaults_raw: Optional[str] = None,
     ) -> None:
         self._root = Tk()
         self._root.title("OpenLoop — Workflow Builder")
@@ -49,6 +50,7 @@ class WorkflowApp:
         self._stop_event = threading.Event()
         self._running = False
         self._log_queue: queue.Queue = queue.Queue()
+        self._opencode_defaults_raw = opencode_defaults_raw
 
         self._build_ui()
         self._load_config()
@@ -228,6 +230,45 @@ class WorkflowApp:
         Button(
             is_frame, text="Browse", command=self._browse_init_script
         ).pack(side=LEFT, padx=1)
+        row += 1
+
+        sep2 = ttk.Separator(config_frame, orient="horizontal")
+        sep2.grid(row=row, column=0, columnspan=2, sticky=(W, E), pady=4)
+        row += 1
+
+        Label(config_frame, text="Model:").grid(
+            row=row, column=0, sticky=W, pady=2
+        )
+        self._oc_model_var = StringVar()
+        Entry(config_frame, textvariable=self._oc_model_var, width=24).grid(
+            row=row, column=1, sticky=W, padx=4
+        )
+        row += 1
+
+        Label(config_frame, text="Agent:").grid(
+            row=row, column=0, sticky=W, pady=2
+        )
+        self._oc_agent_var = StringVar()
+        Entry(
+            config_frame, textvariable=self._oc_agent_var, width=24
+        ).grid(row=row, column=1, sticky=W, padx=4)
+        row += 1
+
+        Label(config_frame, text="Variant:").grid(
+            row=row, column=0, sticky=W, pady=2
+        )
+        self._oc_variant_var = StringVar()
+        Entry(
+            config_frame, textvariable=self._oc_variant_var, width=24
+        ).grid(row=row, column=1, sticky=W, padx=4)
+        row += 1
+
+        self._oc_pure_var = BooleanVar(value=False)
+        Checkbutton(
+            config_frame,
+            text="Pure Mode (no plugins)",
+            variable=self._oc_pure_var,
+        ).grid(row=row, column=0, columnspan=2, sticky=W, pady=2)
         row += 1
 
         # Column 2: Agent Preview
@@ -410,6 +451,22 @@ class WorkflowApp:
         iscript = self._init_script_var.get().strip()
         if iscript:
             data["init_script"] = iscript
+
+        oc_defaults: dict = {}
+        model = self._oc_model_var.get().strip()
+        if model:
+            oc_defaults["model"] = model
+        agent = self._oc_agent_var.get().strip()
+        if agent:
+            oc_defaults["agent"] = agent
+        variant = self._oc_variant_var.get().strip()
+        if variant:
+            oc_defaults["variant"] = variant
+        if self._oc_pure_var.get():
+            oc_defaults["pure"] = True
+        if oc_defaults:
+            data["opencode_defaults"] = oc_defaults
+
         return data
 
     def _load_workflow_into_ui(self, data: dict) -> None:
@@ -453,6 +510,13 @@ class WorkflowApp:
             self._workdir_var.set(str(Path(data["workdir"]).resolve()))
         if "init_script" in data:
             self._init_script_var.set(data["init_script"] or "")
+
+        oc_defaults = data.get("opencode_defaults", {})
+        if isinstance(oc_defaults, dict):
+            self._oc_model_var.set(str(oc_defaults.get("model", "")))
+            self._oc_agent_var.set(str(oc_defaults.get("agent", "")))
+            self._oc_variant_var.set(str(oc_defaults.get("variant", "")))
+            self._oc_pure_var.set(bool(oc_defaults.get("pure", False)))
 
     def _load_workflow_from_path(self, path: str) -> None:
         try:
@@ -546,6 +610,19 @@ class WorkflowApp:
             return
 
         data = self._get_workflow_data()
+        if self._opencode_defaults_raw:
+            try:
+                import json as _json
+                raw = _json.loads(self._opencode_defaults_raw)
+                if isinstance(raw, dict):
+                    data.setdefault("opencode_defaults", {})
+                    existing = data["opencode_defaults"]
+                    if isinstance(existing, dict):
+                        existing.update(raw)
+                    else:
+                        data["opencode_defaults"] = raw
+            except ValueError:
+                pass
         if not data.get("loop_agents"):
             messagebox.showwarning(
                 "No Loop Agents",

@@ -1,0 +1,42 @@
+{
+  /*
+   * OpenLoop — example configuration
+   * Copy this file to openloop.json and adjust values for your setup.
+   * This file uses JSONC syntax (comments are stripped automatically).
+   */
+
+  // Directory containing agent .md files (relative to CWD or absolute)
+  "agents_dir": "./agents",
+
+  // Directory containing workflow .json files
+  "workflows_dir": "./workflows",
+
+  // Path or name of the opencode binary
+  "opencode_binary": "opencode",
+
+  // Default max_loops when a workflow does not specify one
+  "default_max_loops": 10,
+
+  // Working directory for the opencode subprocess
+  // "workdir": "/path/to/your/project",
+
+  // Script or command run before each opencode invocation
+  // Useful for activating a conda environment, setting env vars, etc.
+  // "init_script": "conda activate myenv",
+
+  // Default flags passed to every `opencode run` invocation.
+  // These can be overridden per workflow or via --opencode-defaults CLI flag.
+  "opencode_defaults": {
+    // Model in provider/model format
+    // "model": "Big Pickle",
+
+    // OpenCode agent to use: "build" (default, writes code) or "plan" (safer, only plans)
+    // "agent": "plan",
+
+    // Reasoning effort: "high", "max", or "minimal" (provider-specific)
+    // "variant": "high",
+
+    // Run without external plugins (MCP servers / skills)
+    // "pure": false
+  }
+}

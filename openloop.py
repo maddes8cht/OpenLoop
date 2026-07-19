@@ -34,8 +34,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=str,
-        default="config.json",
-        help="Path to configuration file (default: config.json)",
+        default=None,
+        help="Path to configuration file (default: openloop.json in CWD, "
+             "falls back to openloop.json next to openloop.py)",
+    )
+    parser.add_argument(
+        "--opencode-defaults",
+        type=str,
+        dest="opencode_defaults",
+        default=None,
+        help="JSON string overriding opencode defaults for all agents "
+             "(e.g., '{\"model\":\"gpt-4o\",\"agent\":\"plan\"}')",
     )
     return parser.parse_args(argv)
 
@@ -66,6 +75,7 @@ def _run_cli(args: argparse.Namespace, config) -> None:
         from pathlib import Path
         from core.config import Config
         from core.engine import ExecutionEngine
+        from core.runner import OpenCodeOptions
 
         cfg = config if isinstance(config, Config) else Config.load(args.config)
         data = json_loads(Path(args.workflow).read_text(encoding="utf-8"))
@@ -74,6 +84,19 @@ def _run_cli(args: argparse.Namespace, config) -> None:
             data["workdir"] = str(Path(args.workdir).resolve())
         if args.init_script:
             data["init_script"] = args.init_script
+        if args.opencode_defaults:
+            try:
+                raw = json_loads(args.opencode_defaults)
+                if isinstance(raw, dict):
+                    data.setdefault("opencode_defaults", {})
+                    existing = data["opencode_defaults"]
+                    if isinstance(existing, dict):
+                        existing.update(raw)
+                    else:
+                        data["opencode_defaults"] = raw
+            except ValueError as exc:
+                print(f"Error: Invalid --opencode-defaults JSON: {exc}")
+                sys.exit(1)
 
         engine = ExecutionEngine(config=cfg)
         engine.execute_workflow_data(data)
@@ -104,6 +127,7 @@ def _run_gui(args: argparse.Namespace, config) -> None:
         workflow_path=args.workflow,
         workdir=args.workdir,
         init_script=args.init_script,
+        opencode_defaults_raw=args.opencode_defaults,
     )
     try:
         app.run()

@@ -47,7 +47,7 @@ Four sub-sections:
 | **Preparation** | Agents run once before the loop. Supports multiple agents. |
 | **Loop** | Agent sequence executed each iteration. |
 | **Finalization** | Agents run after the loop completes. Supports multiple agents. |
-| **Configuration** | `max_loops`, `end_state_condition`, `finalize_on_abort`, `workdir`, `init_script` |
+| **Configuration** | `max_loops`, `end_state_condition`, `finalize_on_abort`, `workdir`, `init_script`, model/agent/variant/pure mode (OpenCode Defaults) |
 
 Use the buttons below each zone to add/remove agents:
 - **Add Prep Agent** / **Add Final Agent** — moves selected agent from the pool to the zone

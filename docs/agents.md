@@ -1,7 +1,7 @@
 # Agent Definitions
 
 Agent definition files use Markdown (`.md`) with YAML frontmatter.  
-They are stored in `agents/` (configurable via `agents_dir` in `config.json`).
+They are stored in `agents/` (configurable via `agents_dir` in `openloop.json`).
 
 ## File Format
 

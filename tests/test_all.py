@@ -237,6 +237,8 @@ class TestConfig:
             c._validate()
 
     def test_get_config_before_load_raises(self):
+        import core.config
+        core.config._config = None
         from core.config import get_config
 
         with pytest.raises(RuntimeError, match="not loaded"):
@@ -352,6 +354,170 @@ class TestStateParser:
         text = '<STATE_UPDATE>{"ok": true}</STATE_UPDATE>'
         result = StateParser.extract_state_update(text)
         assert result == {"ok": True}
+
+
+# ===========================================================================
+# core.runner — OpenCodeOptions
+# ===========================================================================
+
+
+class TestOpenCodeOptions:
+    def test_default_initialization(self):
+        from core.runner import OpenCodeOptions
+
+        opts = OpenCodeOptions()
+        assert opts.model is None
+        assert opts.agent is None
+        assert opts.variant is None
+        assert opts.pure is False
+        assert opts.log_level is None
+        assert opts.extra_args == []
+
+    def test_custom_initialization(self):
+        from core.runner import OpenCodeOptions
+
+        opts = OpenCodeOptions(model="gpt-4", agent="plan", variant="full", pure=True, log_level="debug", extra_args=["--verbose"])
+        assert opts.model == "gpt-4"
+        assert opts.agent == "plan"
+        assert opts.variant == "full"
+        assert opts.pure is True
+        assert opts.log_level == "debug"
+        assert opts.extra_args == ["--verbose"]
+
+    def test_to_cli_args_all_fields(self):
+        from core.runner import OpenCodeOptions
+
+        opts = OpenCodeOptions(model="gpt-4", agent="plan", variant="full", pure=True, log_level="debug", extra_args=["--verbose"])
+        args = opts.to_cli_args()
+        assert args == ["-m", "gpt-4", "--agent", "plan", "--variant", "full", "--pure", "--log-level", "debug", "--verbose"]
+
+    def test_to_cli_args_empty(self):
+        from core.runner import OpenCodeOptions
+
+        opts = OpenCodeOptions()
+        assert opts.to_cli_args() == []
+
+    def test_to_cli_args_partial(self):
+        from core.runner import OpenCodeOptions
+
+        opts = OpenCodeOptions(model="claude")
+        assert opts.to_cli_args() == ["-m", "claude"]
+
+    def test_merge_full(self):
+        from core.runner import OpenCodeOptions
+
+        base = OpenCodeOptions(model="gpt-4", agent="build", variant="fast", pure=False, log_level="info")
+        override = OpenCodeOptions(model="claude", agent="plan", variant="full", pure=True, log_level="debug")
+        merged = base.merge(override)
+        assert merged.model == "claude"
+        assert merged.agent == "plan"
+        assert merged.variant == "full"
+        assert merged.pure is True
+        assert merged.log_level == "debug"
+
+    def test_merge_partial(self):
+        from core.runner import OpenCodeOptions
+
+        base = OpenCodeOptions(model="gpt-4", agent="build")
+        override = OpenCodeOptions(model="claude")
+        merged = base.merge(override)
+        assert merged.model == "claude"
+        assert merged.agent == "build"
+        assert merged.pure is False
+
+    def test_merge_empty(self):
+        from core.runner import OpenCodeOptions
+
+        base = OpenCodeOptions(model="gpt-4", agent="plan", pure=True)
+        override = OpenCodeOptions()
+        merged = base.merge(override)
+        assert merged.model == "gpt-4"
+        assert merged.agent == "plan"
+        assert merged.pure is True
+
+    def test_merge_pure_flag(self):
+        from core.runner import OpenCodeOptions
+
+        base = OpenCodeOptions(pure=False)
+        override = OpenCodeOptions(pure=True)
+        merged = base.merge(override)
+        assert merged.pure is True
+
+        base2 = OpenCodeOptions(pure=True)
+        override2 = OpenCodeOptions(pure=False)
+        merged2 = base2.merge(override2)
+        assert merged2.pure is True
+
+    def test_merge_extra_args_concatenated(self):
+        from core.runner import OpenCodeOptions
+
+        base = OpenCodeOptions(extra_args=["-v"])
+        override = OpenCodeOptions(extra_args=["--dry-run"])
+        merged = base.merge(override)
+        assert merged.extra_args == ["-v", "--dry-run"]
+
+    def test_to_dict_all_fields(self):
+        from core.runner import OpenCodeOptions
+
+        opts = OpenCodeOptions(model="gpt-4", agent="plan", variant="full", pure=True, log_level="debug", extra_args=["--verbose"])
+        d = opts.to_dict()
+        assert d == {"model": "gpt-4", "agent": "plan", "variant": "full", "pure": True, "log_level": "debug", "extra_args": ["--verbose"]}
+
+    def test_to_dict_empty(self):
+        from core.runner import OpenCodeOptions
+
+        d = OpenCodeOptions().to_dict()
+        assert d == {}
+
+    def test_to_dict_partial(self):
+        from core.runner import OpenCodeOptions
+
+        opts = OpenCodeOptions(model="claude", pure=True)
+        d = opts.to_dict()
+        assert d == {"model": "claude", "pure": True}
+
+    def test_from_dict_all_fields(self):
+        from core.runner import OpenCodeOptions
+
+        opts = OpenCodeOptions.from_dict({"model": "gpt-4", "agent": "plan", "variant": "full", "pure": True, "log_level": "debug", "extra_args": ["--verbose"]})
+        assert opts.model == "gpt-4"
+        assert opts.agent == "plan"
+        assert opts.variant == "full"
+        assert opts.pure is True
+        assert opts.log_level == "debug"
+        assert opts.extra_args == ["--verbose"]
+
+    def test_from_dict_empty(self):
+        from core.runner import OpenCodeOptions
+
+        opts = OpenCodeOptions.from_dict({})
+        assert opts.model is None
+        assert opts.agent is None
+        assert opts.pure is False
+        assert opts.extra_args == []
+
+    def test_from_dict_partial(self):
+        from core.runner import OpenCodeOptions
+
+        opts = OpenCodeOptions.from_dict({"model": "claude"})
+        assert opts.model == "claude"
+        assert opts.agent is None
+
+    def test_from_dict_pure_coercion(self):
+        from core.runner import OpenCodeOptions
+
+        opts = OpenCodeOptions.from_dict({"pure": 1})
+        assert opts.pure is True
+
+        opts2 = OpenCodeOptions.from_dict({"pure": "yes"})
+        assert opts2.pure is True
+
+    def test_roundtrip(self):
+        from core.runner import OpenCodeOptions
+
+        original = OpenCodeOptions(model="gpt-4", agent="plan", variant="full", pure=True, log_level="info", extra_args=["-v"])
+        restored = OpenCodeOptions.from_dict(original.to_dict())
+        assert restored == original
 
 
 # ===========================================================================
@@ -490,7 +656,7 @@ class TestOpenCodeRunner:
 
             r = OpenCodeRunner(binary="my-opencode")
             r.run("some prompt")
-            cmd = mock_run.call_args[0][0]
+            cmd = mock_run.call_args.kwargs["args"]
             assert cmd == ["my-opencode", "run", "some prompt"]
 
 
@@ -549,10 +715,10 @@ class TestAgentLoader:
 
         agents_dir = tmp_path / "agents"
         agents_dir.mkdir()
-        (agents_dir / "agent.md").write_text("---\nname: a\nrole: r\n---\nprompt")
+        (agents_dir / "tester.md").write_text("---\nname: tester\nrole: r\n---\nprompt")
         (agents_dir / "readme.txt").write_text("hello")
         loader = AgentLoader(str(agents_dir))
-        assert loader.list_agents() == ["a"]
+        assert loader.list_agents() == ["tester"]
 
     def test_get_agent_missing_raises(self, tmp_path):
         from core.agent import AgentLoader
@@ -683,9 +849,9 @@ class TestWorkflowConfig:
         from core.engine import WorkflowConfig
 
         wc = WorkflowConfig()
-        assert wc.preparation_agent is None
+        assert wc.preparation_agents == []
         assert wc.loop_agents == []
-        assert wc.finalization_agent is None
+        assert wc.finalization_agents == []
         assert wc.end_state_condition == "is_complete == True"
         assert wc.max_loops == 10
         assert wc.finalize_on_abort is False
@@ -695,17 +861,17 @@ class TestWorkflowConfig:
 
         wc = WorkflowConfig.from_dict(
             {
-                "preparation_agent": "prep",
+                "preparation_agents": ["prep"],
                 "loop_agents": ["a", "b"],
-                "finalization_agent": "fin",
+                "finalization_agents": ["fin"],
                 "end_state_condition": "payload.get('x') > 5",
                 "max_loops": 20,
                 "finalize_on_abort": True,
             }
         )
-        assert wc.preparation_agent == "prep"
+        assert wc.preparation_agents == ["prep"]
         assert wc.loop_agents == ["a", "b"]
-        assert wc.finalization_agent == "fin"
+        assert wc.finalization_agents == ["fin"]
         assert wc.end_state_condition == "payload.get('x') > 5"
         assert wc.max_loops == 20
         assert wc.finalize_on_abort is True
@@ -714,30 +880,31 @@ class TestWorkflowConfig:
         from core.engine import WorkflowConfig
 
         wc = WorkflowConfig.from_dict({})
-        assert wc.preparation_agent is None
+        assert wc.preparation_agents == []
         assert wc.loop_agents == []
-        assert wc.finalization_agent is None
+        assert wc.finalization_agents == []
 
     def test_to_dict(self):
         from core.engine import WorkflowConfig
 
         wc = WorkflowConfig(
-            preparation_agent="prep",
+            preparation_agents=["prep"],
             loop_agents=["a"],
-            finalization_agent="fin",
+            finalization_agents=["fin"],
             end_state_condition="is_complete == True",
             max_loops=5,
             finalize_on_abort=True,
         )
         d = wc.to_dict()
-        assert d == {
-            "preparation_agent": "prep",
-            "loop_agents": ["a"],
-            "finalization_agent": "fin",
-            "end_state_condition": "is_complete == True",
-            "max_loops": 5,
-            "finalize_on_abort": True,
-        }
+        assert d["preparation_agents"] == ["prep"]
+        assert d["loop_agents"] == ["a"]
+        assert d["finalization_agents"] == ["fin"]
+        assert d["end_state_condition"] == "is_complete == True"
+        assert d["max_loops"] == 5
+        assert d["finalize_on_abort"] is True
+        assert d["workdir"] is None
+        assert d["init_script"] is None
+        assert "opencode_defaults" not in d
 
     def test_load_from_file(self, tmp_path):
         from core.engine import WorkflowConfig
@@ -894,11 +1061,19 @@ class TestExecutionEngine:
 
         stop = threading.Event()
         engine = ExecutionEngine(stop_event=stop)
-        engine.runner = self._make_mock_runner(
-            [
-                {"success": True, "output": '<state_update>{"is_complete": false}</state_update>'},
-            ]
-        )
+        responses = [
+            {"success": True, "output": '<state_update>{"is_complete": false}</state_update>'},
+        ]
+        idx = [0]
+
+        def slow_run(prompt, opts=None, timeout=None, cwd=None, init_script=None):
+            time.sleep(0.05)
+            r = responses[idx[0] % len(responses)]
+            idx[0] += 1
+            return type("R", (), dict(r, error="", exit_code=0 if r["success"] else 1))()
+
+        engine.runner = MagicMock()
+        engine.runner.run.side_effect = slow_run
         engine.agent_loader = self._make_mock_agent_loader({"a": "Agent"})
 
         def delayed_stop():
@@ -1102,6 +1277,79 @@ class TestExecutionEngine:
         engine.log("test message")
         assert "[OpenLoop] test message" in logs
 
+    def test_opencode_defaults_merged_and_passed_to_runner(self, tmp_path):
+        from core.engine import ExecutionEngine
+        from core.runner import OpenCodeOptions
+
+        agents = tmp_path / "agents"
+        agents.mkdir()
+        (agents / "a.md").write_text("---\nname: a\nrole: test\n---\nYou are A.")
+
+        engine = ExecutionEngine()
+        calls = []
+
+        class TrackingRunner:
+            def run(self, prompt, opts=None, timeout=None, cwd=None, init_script=None):
+                calls.append(opts)
+                return type("R", (), {"success": True, "output": '<state_update>{"is_complete": true}</state_update>', "error": "", "exit_code": 0})()
+
+        engine.runner = TrackingRunner()
+        engine.agent_loader = type("L", (), {"get_agent": lambda self, name: type("A", (), {"name": name, "role": "", "system_prompt": "You are A."})()})()
+
+        engine.config = type("C", (), {
+            "opencode_defaults": OpenCodeOptions(model="gpt-4", agent="build"),
+            "workdir": None,
+            "init_script": None,
+        })()
+
+        engine.execute_workflow_data({
+            "loop_agents": ["a"],
+            "max_loops": 1,
+            "end_state_condition": "is_complete == True",
+        })
+
+        assert len(calls) == 1
+        passed_opts = calls[0]
+        assert passed_opts.model == "gpt-4"
+        assert passed_opts.agent == "build"
+
+    def test_opencode_defaults_workflow_overrides_config(self, tmp_path):
+        from core.engine import ExecutionEngine
+        from core.runner import OpenCodeOptions
+
+        agents = tmp_path / "agents"
+        agents.mkdir()
+        (agents / "a.md").write_text("---\nname: a\nrole: test\n---\nYou are A.")
+
+        engine = ExecutionEngine()
+        calls = []
+
+        class TrackingRunner:
+            def run(self, prompt, opts=None, timeout=None, cwd=None, init_script=None):
+                calls.append(opts)
+                return type("R", (), {"success": True, "output": '<state_update>{"is_complete": true}</state_update>', "error": "", "exit_code": 0})()
+
+        engine.runner = TrackingRunner()
+        engine.agent_loader = type("L", (), {"get_agent": lambda self, name: type("A", (), {"name": name, "role": "", "system_prompt": "You are A."})()})()
+
+        engine.config = type("C", (), {
+            "opencode_defaults": OpenCodeOptions(model="gpt-4", agent="build"),
+            "workdir": None,
+            "init_script": None,
+        })()
+
+        engine.execute_workflow_data({
+            "loop_agents": ["a"],
+            "max_loops": 1,
+            "end_state_condition": "is_complete == True",
+            "opencode_defaults": {"model": "claude"},
+        })
+
+        assert len(calls) == 1
+        passed_opts = calls[0]
+        assert passed_opts.model == "claude"
+        assert passed_opts.agent == "build"
+
     # -- helpers --
 
     @staticmethod
@@ -1111,7 +1359,7 @@ class TestExecutionEngine:
         ]
         idx = [0]
 
-        def side_effect(prompt, timeout=None):
+        def side_effect(prompt, opts=None, timeout=None, cwd=None, init_script=None):
             r = responses[idx[0] % len(responses)]
             idx[0] += 1
             return type("R", (), dict(r, error="", exit_code=0 if r["success"] else 1))()
@@ -1145,7 +1393,7 @@ class TestOpenLoopEntryPoint:
         args = parse_args([])
         assert args.cli is False
         assert args.workflow is None
-        assert args.config == "config.json"
+        assert args.config is None
 
     def test_parse_args_cli_mode(self):
         from openloop import parse_args
@@ -1174,58 +1422,65 @@ class TestOpenLoopEntryPoint:
             main(["--cli"])
         assert exc.value.code == 1
 
-    @patch("openloop.Config")
-    @patch("openloop.ExecutionEngine")
-    def test_main_cli_with_workflow_completed(self, mock_engine_cls, mock_config_cls, tmp_path):
+    def test_main_cli_with_workflow_completed(self, tmp_path):
         from openloop import main
 
+        wf = tmp_path / "test.json"
+        wf.write_text(json.dumps({"loop_agents": ["a"], "max_loops": 1}))
+
         mock_config = MagicMock()
-        mock_config_cls.load.return_value = mock_config
         mock_engine = MagicMock()
-        mock_engine_cls.return_value = mock_engine
         mock_state = MagicMock()
         mock_state.termination_reason = "completed"
         mock_state.iteration = 3
         mock_state.is_complete = True
         mock_engine.state = mock_state
 
-        with patch("openloop.Config.load", return_value=mock_config):
-            with patch("openloop.ExecutionEngine") as me:
-                me.return_value = mock_engine
-                with pytest.raises(SystemExit) as exc:
-                    main(["--cli", "--workflow", str(tmp_path / "test.json")])
-                assert exc.value.code == 0
+        with (
+            patch("core.config.Config.load", return_value=mock_config),
+            patch("core.engine.ExecutionEngine", return_value=mock_engine),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["--cli", "--workflow", str(wf)])
+        assert exc.value.code == 0
 
-    @patch("openloop.ExecutionEngine")
-    def test_main_cli_import_error(self, mock_engine_cls):
+    def test_main_cli_import_error(self, tmp_path):
         from openloop import main
 
-        mock_engine_cls.side_effect = ImportError("missing dep")
-        with pytest.raises(SystemExit) as exc:
-            main(["--cli", "--workflow", "test.json"])
+        wf = tmp_path / "test.json"
+        wf.write_text(json.dumps({"loop_agents": ["a"]}))
+
+        with (
+            patch("core.config.Config.load", return_value=MagicMock()),
+            patch("core.engine.ExecutionEngine", side_effect=ImportError("missing dep")),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["--cli", "--workflow", str(wf)])
         assert exc.value.code == 1
 
-    @patch("openloop.Config")
-    def test_main_gui_mode(self, mock_config_cls):
+    def test_main_gui_mode(self):
         from openloop import main
 
         mock_config = MagicMock()
-        mock_config_cls.load.return_value = mock_config
 
-        with patch("openloop.WorkflowApp") as mock_app_cls:
+        with (
+            patch("core.config.Config.load", return_value=mock_config),
+            patch("ui.app.WorkflowApp") as mock_app_cls,
+        ):
             mock_app = MagicMock()
             mock_app_cls.return_value = mock_app
             main([])
             mock_app.run.assert_called_once()
 
-    @patch("openloop.Config")
-    def test_main_gui_keyboard_interrupt(self, mock_config_cls):
+    def test_main_gui_keyboard_interrupt(self):
         from openloop import main
 
         mock_config = MagicMock()
-        mock_config_cls.load.return_value = mock_config
 
-        with patch("openloop.WorkflowApp") as mock_app_cls:
+        with (
+            patch("core.config.Config.load", return_value=mock_config),
+            patch("ui.app.WorkflowApp") as mock_app_cls,
+        ):
             mock_app = MagicMock()
             mock_app.run.side_effect = KeyboardInterrupt()
             mock_app_cls.return_value = mock_app
@@ -1234,10 +1489,18 @@ class TestOpenLoopEntryPoint:
 
     def test_main_gui_import_error(self):
         from openloop import main
+        import builtins
+
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "ui.app":
+                raise ImportError("no tkinter")
+            return real_import(name, *args, **kwargs)
 
         with (
-            patch("openloop.Config.load", return_value=MagicMock()),
-            patch("openloop.WorkflowApp", side_effect=ImportError("no tkinter")),
+            patch("core.config.Config.load", return_value=MagicMock()),
+            patch("builtins.__import__", side_effect=mock_import),
             pytest.raises(SystemExit) as exc,
         ):
             main([])
@@ -1257,6 +1520,7 @@ class TestWorkflowApp:
             patch("ui.app.WorkflowApp._load_config"),
             patch("ui.app.WorkflowApp._refresh_agent_list"),
             patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
         ):
             from ui.app import WorkflowApp
 
@@ -1271,6 +1535,7 @@ class TestWorkflowApp:
             patch("ui.app.WorkflowApp._load_config"),
             patch("ui.app.WorkflowApp._refresh_agent_list"),
             patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
         ):
             from ui.app import WorkflowApp
 
@@ -1287,6 +1552,7 @@ class TestWorkflowApp:
             patch("ui.app.WorkflowApp._load_config"),
             patch("ui.app.WorkflowApp._refresh_agent_list"),
             patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
         ):
             from ui.app import WorkflowApp
 
@@ -1303,6 +1569,7 @@ class TestWorkflowApp:
             patch("ui.app.WorkflowApp._load_config"),
             patch("ui.app.WorkflowApp._refresh_agent_list"),
             patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
         ):
             from ui.app import WorkflowApp
 
@@ -1314,6 +1581,20 @@ class TestWorkflowApp:
                 mock_stop.assert_called_once()
                 app._root.destroy.assert_called_once()
 
+    def _setup_app_open_code_vars(self, app):
+        app._workdir_var = MagicMock()
+        app._workdir_var.get.return_value = ""
+        app._init_script_var = MagicMock()
+        app._init_script_var.get.return_value = ""
+        app._oc_model_var = MagicMock()
+        app._oc_model_var.get.return_value = ""
+        app._oc_agent_var = MagicMock()
+        app._oc_agent_var.get.return_value = ""
+        app._oc_variant_var = MagicMock()
+        app._oc_variant_var.get.return_value = ""
+        app._oc_pure_var = MagicMock()
+        app._oc_pure_var.get.return_value = False
+
     def test_get_workflow_data(self):
         with (
             patch("ui.app.Tk"),
@@ -1321,19 +1602,21 @@ class TestWorkflowApp:
             patch("ui.app.WorkflowApp._load_config"),
             patch("ui.app.WorkflowApp._refresh_agent_list"),
             patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
         ):
             from ui.app import WorkflowApp
 
             app = WorkflowApp()
+            self._setup_app_open_code_vars(app)
             app._prep_listbox = MagicMock()
             app._prep_listbox.size.return_value = 1
-            app._prep_listbox.get.return_value = "prepper"
+            app._prep_listbox.get.return_value = ["prepper"]
             app._loop_listbox = MagicMock()
             app._loop_listbox.get.return_value = ["a", "b"]
             app._loop_listbox.size.return_value = 2
             app._final_listbox = MagicMock()
             app._final_listbox.size.return_value = 1
-            app._final_listbox.get.return_value = "finisher"
+            app._final_listbox.get.return_value = ["finisher"]
             app._max_loops_var = MagicMock()
             app._max_loops_var.get.return_value = "5"
             app._end_condition_var = MagicMock()
@@ -1342,9 +1625,9 @@ class TestWorkflowApp:
             app._finalize_on_abort_var.get.return_value = True
 
             data = app._get_workflow_data()
-            assert data["preparation_agent"] == "prepper"
+            assert data["preparation_agents"] == ["prepper"]
             assert data["loop_agents"] == ["a", "b"]
-            assert data["finalization_agent"] == "finisher"
+            assert data["finalization_agents"] == ["finisher"]
             assert data["max_loops"] == 5
             assert data["end_state_condition"] == "custom == True"
             assert data["finalize_on_abort"] is True
@@ -1356,16 +1639,20 @@ class TestWorkflowApp:
             patch("ui.app.WorkflowApp._load_config"),
             patch("ui.app.WorkflowApp._refresh_agent_list"),
             patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
         ):
             from ui.app import WorkflowApp
 
             app = WorkflowApp()
+            self._setup_app_open_code_vars(app)
             app._prep_listbox = MagicMock()
+            app._prep_listbox.get.return_value = ()
             app._prep_listbox.size.return_value = 0
             app._loop_listbox = MagicMock()
-            app._loop_listbox.get.return_value = []
+            app._loop_listbox.get.return_value = ()
             app._loop_listbox.size.return_value = 0
             app._final_listbox = MagicMock()
+            app._final_listbox.get.return_value = ()
             app._final_listbox.size.return_value = 0
             app._max_loops_var = MagicMock()
             app._max_loops_var.get.return_value = "not_a_number"
@@ -1375,9 +1662,9 @@ class TestWorkflowApp:
             app._finalize_on_abort_var.get.return_value = False
 
             data = app._get_workflow_data()
-            assert "preparation_agent" not in data
+            assert data.get("preparation_agents") == []
             assert data["loop_agents"] == []
-            assert "finalization_agent" not in data
+            assert data.get("finalization_agents") == []
             assert data["max_loops"] == 10
 
     def test_load_workflow_into_ui(self):
@@ -1387,10 +1674,12 @@ class TestWorkflowApp:
             patch("ui.app.WorkflowApp._load_config"),
             patch("ui.app.WorkflowApp._refresh_agent_list"),
             patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
         ):
             from ui.app import WorkflowApp
 
             app = WorkflowApp()
+            self._setup_app_open_code_vars(app)
             app._prep_listbox = MagicMock()
             app._loop_listbox = MagicMock()
             app._final_listbox = MagicMock()
@@ -1400,9 +1689,9 @@ class TestWorkflowApp:
 
             app._load_workflow_into_ui(
                 {
-                    "preparation_agent": "prep",
+                    "preparation_agents": ["prep"],
                     "loop_agents": ["a", "b"],
-                    "finalization_agent": "fin",
+                    "finalization_agents": ["fin"],
                     "max_loops": 7,
                     "end_state_condition": "x == 1",
                     "finalize_on_abort": True,
@@ -1425,6 +1714,7 @@ class TestWorkflowApp:
             patch("ui.app.WorkflowApp._load_config"),
             patch("ui.app.WorkflowApp._refresh_agent_list"),
             patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
         ):
             from ui.app import WorkflowApp
 
@@ -1440,6 +1730,7 @@ class TestWorkflowApp:
             patch("ui.app.WorkflowApp._load_config"),
             patch("ui.app.WorkflowApp._refresh_agent_list"),
             patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
         ):
             from ui.app import WorkflowApp
 
@@ -1458,6 +1749,7 @@ class TestWorkflowApp:
             patch("ui.app.WorkflowApp._load_config"),
             patch("ui.app.WorkflowApp._refresh_agent_list"),
             patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
         ):
             from ui.app import WorkflowApp
 

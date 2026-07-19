@@ -1,6 +1,6 @@
 # Workflow Definitions
 
-Workflow definitions are JSON files stored in `workflows/` (configurable via `workflows_dir` in `config.json`).
+Workflow definitions are JSON files stored in `workflows/` (configurable via `workflows_dir` in `openloop.json`).
 
 ## Schema
 
@@ -27,8 +27,9 @@ Workflow definitions are JSON files stored in `workflows/` (configurable via `wo
 | `end_state_condition` | string | `"is_complete == True"` | Python expression evaluated after each agent to decide loop termination |
 | `max_loops` | integer | `10` | Hard limit on loop iterations |
 | `finalize_on_abort` | boolean | `false` | If `true`, finalization runs even when `max_loops` is reached |
-| `workdir` | string / null | `null` | Working directory for the opencode subprocess (overrides `config.json`) |
-| `init_script` | string / null | `null` | Script/command run before each agent invocation (overrides `config.json`) |
+| `workdir` | string / null | `null` | Working directory for the opencode subprocess (overrides `openloop.json`) |
+| `init_script` | string / null | `null` | Script/command run before each agent invocation (overrides `openloop.json`) |
+| `opencode_defaults` | object | `{}` | Default flags for `opencode run` (see Configuration docs). Merges with `openloop.json` — workflow values override config values. |
 
 ## end_state_condition
 
@@ -54,8 +55,16 @@ Examples:
 
 ## Override Order
 
-For `workdir` and `init_script`:
+### `workdir` and `init_script`
 
 1. CLI flag (`--workdir` / `--init-script`) — highest priority
 2. Workflow JSON field — medium priority
-3. `config.json` field — lowest priority
+3. `openloop.json` field — lowest priority
+
+### `opencode_defaults`
+
+1. CLI flag (`--opencode-defaults`) — highest priority
+2. Workflow JSON `opencode_defaults` — medium priority
+3. `openloop.json` `opencode_defaults` — lowest priority
+
+Values are **merged** (not replaced) at each level: a workflow specifying only `{"model":"gpt-4o"}` will preserve the config's `agent` setting.

@@ -88,7 +88,7 @@ Detailed reference documentation is available in the [`docs/`](./docs/) director
 | [Agents](./docs/agents.md) | Agent file format, frontmatter fields, system prompt conventions |
 | [Workflows](./docs/workflows.md) | Workflow JSON schema, slot configuration, `end_state_condition` syntax |
 | [CLI](./docs/cli.md) | Complete CLI reference, flags, exit codes, examples |
-| [Configuration](./docs/configuration.md) | `config.json` schema, field descriptions, override priority |
+| [Configuration](./docs/configuration.md) | `openloop.json` schema (JSONC with `//` and `/* */` comments), field descriptions, search order, override priority |
 | [State](./docs/state.md) | `WorkflowState` API, merge behavior, agent output format |
 | [GUI](./docs/gui.md) | Tkinter GUI layout, zones, toolbar actions |
 
@@ -103,6 +103,7 @@ Detailed reference documentation is available in the [`docs/`](./docs/) director
 - **Flexible Agent Chaining:** Define any number of agents per phase (preparation, loop, finalization). Supports complex multi-agent pipelines.
 - **Multiple Agents per Phase:** Preparation and Finalization phases support one or multiple agents executed in sequence.
 - **Init Script & Workdir:** Run a setup script (e.g., activate conda environment) and set the working directory before each agent invocation – configurable globally, per workflow, or via CLI.
+- **OpenCode Defaults:** Set global defaults for model, agent (`build`/`plan`), variant, and pure mode for every `opencode run` invocation – configurable in `openloop.json`, per workflow, or via `--opencode-defaults` CLI flag.
 - **CLI & GUI Modes:** Use the visual Tkinter builder for interactive workflow design, or run headless via `--cli` for CI/CD integration.
 - **Ready-to-Use Examples:** Ships with fully fleshed-out `amala.md` (author), `vera.md` (auditor), and `proteus.md` (analyst) agents, plus a working `test_generation` workflow.
 
@@ -113,7 +114,8 @@ Detailed reference documentation is available in the [`docs/`](./docs/) director
 ```text
 openloop/
 ├── openloop.py               # Entry point (starts Tkinter GUI or CLI)
-├── config.json               # Global configuration (optional, uses defaults)
+├── openloop.example.json      # Example configuration with documented fields
+├── openloop.json              # Local configuration (gitignored; searched in CWD, falls back to openloop directory)
 ├── requirements.txt          # Empty (Zero dependencies)
 ├── core/
 │   ├── config.py             # Configuration loader
@@ -144,13 +146,20 @@ git clone https://github.com/yourusername/openloop.git
 cd openloop
 ```
 
-### 2. Verify OpenCode
+### 2. (Optional) Create Configuration
+Copy the example configuration and adjust it to your needs:
+
+```bash
+cp openloop.example.json openloop.json
+```
+
+### 3. Verify OpenCode
 Ensure `opencode` is installed and available in your `$PATH`.
 ```bash
 opencode --version
 ```
 
-### 3. Run OpenLoop
+### 4. Run OpenLoop
 Since there are no dependencies, you can start the GUI immediately:
 
 ```bash
@@ -159,7 +168,7 @@ python openloop.py
 
 The GUI will show the available agents in the left panel. From there you can build a workflow, load the example, or configure a new one.
 
-### 4. Execute the Example Workflow
+### 5. Execute the Example Workflow
 1. Launch the GUI: `python openloop.py`
 2. Click **Load Workflow** and select `workflows/test_generation.json`.
 3. The workflow builder populates with Amala and Vera in the Loop zone.
@@ -175,11 +184,13 @@ python openloop.py --cli --workflow workflows/test_generation.json
 Additional CLI options:
 
 | Flag | Description |
-|---|---|
+|---|---|---|
 | `--cli` | Run in headless CLI mode |
 | `--workflow <path>` | Path to the workflow JSON file |
 | `--workdir <path>` | Override the working directory |
 | `--init-script <cmd>` | Override the init script/command |
+| `--opencode-defaults <json>` | JSON string overriding opencode defaults for all agents (e.g., `'{"model":"gpt-4o","agent":"plan"}'`) |
+| `--config <path>` | Path to configuration file (default: `openloop.json` in CWD, falls back to `openloop.json` next to `openloop.py`) |
 
 ---
 
@@ -196,6 +207,7 @@ Additional CLI options:
 - [x] Workdir & init_script support (global, per-workflow, and CLI override)
 - [x] GUI preview pane for agent content
 - [x] Integration tests
+- [x] Global OpenCode defaults (`opencode_defaults` in config/workflow/CLI) (Issue #23)
 - [ ] Sub-workflow support in slots (Epic #18)
 - [ ] Script hooks as third element category in slots (Epic #19)
 - [x] Dedicated documentation in `docs/` (Issue #20)

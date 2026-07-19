@@ -7,7 +7,7 @@ from typing import Callable, Optional
 from core.agent import AgentDefinition, AgentLoader
 from core.config import Config
 from core.parser import StateParser
-from core.runner import OpenCodeRunner, RunResult
+from core.runner import OpenCodeOptions, OpenCodeRunner, RunResult
 from core.state import WorkflowState
 
 
@@ -21,6 +21,7 @@ class WorkflowConfig:
     finalize_on_abort: bool = False
     workdir: Optional[str] = None
     init_script: Optional[str] = None
+    opencode_defaults: OpenCodeOptions = field(default_factory=OpenCodeOptions)
 
     @classmethod
     def load(cls, path: str | Path) -> "WorkflowConfig":
@@ -55,6 +56,10 @@ class WorkflowConfig:
         elif not isinstance(final, list):
             final = []
 
+        opencode_opts = OpenCodeOptions()
+        if "opencode_defaults" in data and isinstance(data["opencode_defaults"], dict):
+            opencode_opts = OpenCodeOptions.from_dict(data["opencode_defaults"])
+
         return cls(
             preparation_agents=prep,
             loop_agents=list(data.get("loop_agents", [])),
@@ -68,10 +73,11 @@ class WorkflowConfig:
             ),
             workdir=data.get("workdir"),
             init_script=data.get("init_script"),
+            opencode_defaults=opencode_opts,
         )
 
     def to_dict(self) -> dict:
-        return {
+        d: dict = {
             "preparation_agents": self.preparation_agents,
             "loop_agents": self.loop_agents,
             "finalization_agents": self.finalization_agents,
@@ -81,6 +87,10 @@ class WorkflowConfig:
             "workdir": self.workdir,
             "init_script": self.init_script,
         }
+        opts_dict = self.opencode_defaults.to_dict()
+        if opts_dict:
+            d["opencode_defaults"] = opts_dict
+        return d
 
 
 LogCallback = Callable[[str], None]
@@ -116,6 +126,11 @@ class ExecutionEngine:
 
         self._workdir = workflow.workdir or self.config.workdir
         self._init_script = workflow.init_script or self.config.init_script
+        if "max_loops" not in data:
+            workflow.max_loops = self.config.default_max_loops
+        self._opencode_opts = self.config.opencode_defaults.merge(
+            workflow.opencode_defaults
+        )
 
         self._run_preparation(workflow)
         self._run_loop(workflow)
@@ -197,6 +212,7 @@ class ExecutionEngine:
         prompt = self._build_prompt(agent)
         result = self.runner.run(
             prompt,
+            opts=getattr(self, "_opencode_opts", None),
             cwd=getattr(self, "_workdir", None),
             init_script=getattr(self, "_init_script", None),
         )

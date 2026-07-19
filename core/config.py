@@ -1,10 +1,21 @@
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from core.runner import OpenCodeOptions
+
 
 _config: Optional["Config"] = None
+CONFIG_FILENAME = "openloop.json"
+_OPENLOOP_DIR = Path(__file__).resolve().parent.parent
+
+
+def _strip_jsonc(text: str) -> str:
+    text = re.sub(r"//.*", "", text)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    return text
 
 
 @dataclass
@@ -15,29 +26,43 @@ class Config:
     default_max_loops: int = 10
     workdir: Optional[str] = None
     init_script: Optional[str] = None
+    opencode_defaults: OpenCodeOptions = field(default_factory=OpenCodeOptions)
 
     @classmethod
-    def load(cls, path: str | Path = "config.json") -> "Config":
+    def load(cls, path: str | Path | None = None) -> "Config":
         global _config
         _config = cls._from_file(path)
         _config._validate()
         return _config
 
     @classmethod
-    def _from_file(cls, path: str | Path) -> "Config":
-        config_path = Path(path)
+    def _from_file(cls, path: str | Path | None = None) -> "Config":
+        if path:
+            config_path = Path(path)
+        else:
+            config_path = Path(CONFIG_FILENAME)
+
         if not config_path.exists():
-            return cls()
+            fallback = _OPENLOOP_DIR / CONFIG_FILENAME
+            if fallback.exists():
+                config_path = fallback
+            else:
+                return cls()
 
         try:
-            raw = json.loads(config_path.read_text(encoding="utf-8"))
+            content = config_path.read_text(encoding="utf-8")
+            raw = json.loads(_strip_jsonc(content))
         except json.JSONDecodeError as exc:
             raise ValueError(
-                f"config.json is not valid JSON: {exc}"
+                f"{config_path.name} is not valid JSON: {exc}"
             ) from exc
 
         if not isinstance(raw, dict):
-            raise ValueError("config.json must contain a JSON object")
+            raise ValueError(f"{config_path.name} must contain a JSON object")
+
+        opencode_opts = OpenCodeOptions()
+        if "opencode_defaults" in raw and isinstance(raw["opencode_defaults"], dict):
+            opencode_opts = OpenCodeOptions.from_dict(raw["opencode_defaults"])
 
         return cls(
             agents_dir=str(raw.get("agents_dir", cls.agents_dir)),
@@ -46,6 +71,7 @@ class Config:
             default_max_loops=int(raw.get("default_max_loops", cls.default_max_loops)),
             workdir=raw.get("workdir"),
             init_script=raw.get("init_script"),
+            opencode_defaults=opencode_opts,
         )
 
     def _validate(self) -> None:

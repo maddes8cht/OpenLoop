@@ -12,9 +12,10 @@ python openloop.py [OPTIONS]
 |---|---|
 | `--cli` | Run in headless CLI mode (no GUI). Requires `--workflow`. |
 | `--workflow <path>` | Path to a workflow JSON file. In GUI mode, pre-loads the workflow. In CLI mode, executes it immediately. |
-| `--workdir <path>` | Override the working directory for agent subprocesses. Takes precedence over `config.json` and workflow settings. |
-| `--init-script <cmd>` | Override the init script/command run before each agent invocation. Takes precedence over `config.json` and workflow settings. |
-| `--config <path>` | Path to configuration file (default: `config.json`) |
+| `--workdir <path>` | Override the working directory for agent subprocesses. Takes precedence over `openloop.json` and workflow settings. |
+| `--init-script <cmd>` | Override the init script/command run before each agent invocation. Takes precedence over `openloop.json` and workflow settings. |
+| `--opencode-defaults <json>` | JSON string overriding opencode defaults for all agents (e.g., `'{"model":"gpt-4o","agent":"plan"}'`). Merges with config/workflow settings. |
+| `--config <path>` | Path to configuration file (default: `openloop.json` in CWD, falls back to `openloop.json` next to `openloop.py`) |
 | `--help` | Show help message and exit |
 
 ## Exit Codes
@@ -26,7 +27,7 @@ python openloop.py [OPTIONS]
 
 ## Environment
 
-The `opencode` binary must be available in `PATH` (or configured via `opencode_binary` in `config.json`).
+The `opencode` binary must be available in `PATH` (or configured via `opencode_binary` in `openloop.json`).
 
 ## Examples
 
