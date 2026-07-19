@@ -30,6 +30,67 @@ from tkinter import (
 from typing import Optional
 
 
+class CollapsibleFrame(ttk.Frame):
+    """A frame with a toggle button that shows/hides its body.
+
+    Designed for use in a grid layout.  When collapsed the parent
+    frame's column weight is set to ``collapse_weight`` so the freed
+    horizontal space is redistributed to sibling columns.  When
+    expanded the weight reverts to ``expand_weight``.
+    """
+
+    def __init__(
+        self,
+        parent,
+        text: str,
+        column_index: int,
+        expand_weight: int = 1,
+        collapse_weight: int = 0,
+        **kw,
+    ) -> None:
+        super().__init__(parent, **kw)
+        self._title = text
+        self._collapsed = False
+        self._parent = parent
+        self._col = column_index
+        self._expand_weight = expand_weight
+        self._collapse_weight = collapse_weight
+
+        self._toggle_btn = ttk.Button(
+            self,
+            text=f"▼ {text}",
+            command=self._toggle,
+            style="Toolbutton",
+        )
+        self._toggle_btn.pack(anchor="w", fill="x")
+        self._body = ttk.Frame(self)
+        self._body.pack(fill="both", expand=True)
+
+    def _toggle(self) -> None:
+        if self._body.winfo_manager():
+            self._body.pack_forget()
+            self._toggle_btn.configure(text=f"▶ {self._title}")
+            self._collapsed = True
+            self._parent.columnconfigure(
+                self._col, weight=self._collapse_weight
+            )
+        else:
+            self._body.pack(fill="both", expand=True)
+            self._toggle_btn.configure(text=f"▼ {self._title}")
+            self._collapsed = False
+            self._parent.columnconfigure(
+                self._col, weight=self._expand_weight
+            )
+
+    @property
+    def body(self):
+        return self._body
+
+    @property
+    def is_collapsed(self):
+        return self._collapsed
+
+
 class WorkflowApp:
     def __init__(
         self,
@@ -55,7 +116,6 @@ class WorkflowApp:
         self._opencode_defaults_raw = opencode_defaults_raw
 
         self._build_ui()
-        self._root.after_idle(self._init_preview_collapsed)
         self._root.after_idle(self._init_log_collapsed)
         self._load_config()
         self._refresh_agent_list()
@@ -86,6 +146,7 @@ class WorkflowApp:
         self._root.columnconfigure(0, weight=1)
         self._root.rowconfigure(1, weight=1)
 
+        # ---- Toolbar ----
         toolbar = Frame(self._root)
         toolbar.grid(row=0, column=0, sticky=(W, E), padx=4, pady=2)
         toolbar.columnconfigure(5, weight=1)
@@ -114,39 +175,53 @@ class WorkflowApp:
         self._stop_btn.pack(side=LEFT, padx=2)
 
         self._log_collapsed = BooleanVar(value=True)
-        self._log_toggle_btn = Button(toolbar, text="Log ▼", width=6, command=self._toggle_log)
+        self._log_toggle_btn = Button(
+            toolbar, text="Log ▼", width=6, command=self._toggle_log
+        )
         self._log_toggle_btn.pack(side=LEFT, padx=2)
 
-        self._preview_collapsed = BooleanVar(value=True)
-        self._preview_toggle_btn = Button(toolbar, text="Preview ▼", width=8, command=self._toggle_preview)
-        self._preview_toggle_btn.pack(side=LEFT, padx=2)
-
-        # Main content area + Log in a vertical PanedWindow
+        # ---- Main area: 4 columns + Log ----
         self._root_paned = ttk.PanedWindow(self._root, orient=VERTICAL)
-        self._root_paned.grid(row=1, column=0, sticky=(N, S, W, E), padx=4, pady=2)
+        self._root_paned.grid(
+            row=1, column=0, sticky=(N, S, W, E), padx=4, pady=2
+        )
         self._log_ratio = None
         self._root_paned.bind("<ButtonRelease-1>", self._on_log_sash_drag)
 
-        # Top pane: Content (Agent Pool + Builder + Preview)
-        content = Frame(self._root_paned)
-        content.columnconfigure(0, weight=0)
-        content.columnconfigure(1, weight=1)
-        content.rowconfigure(0, weight=1)
+        # 4 collapsible columns in a grid layout
+        columns_frame = Frame(self._root_paned)
+        columns_frame.columnconfigure(0, weight=0)
+        columns_frame.columnconfigure(1, weight=2)
+        columns_frame.columnconfigure(2, weight=0)
+        columns_frame.columnconfigure(3, weight=1)
+        columns_frame.rowconfigure(0, weight=1)
 
-        # Column 0: Agent Pool (fixed-ish width)
-        agent_frame = ttk.LabelFrame(content, text="Agent Pool", padding=4)
-        agent_frame.grid(row=0, column=0, sticky=(N, S, W), padx=2)
-        agent_frame.rowconfigure(0, weight=1)
+        # ---- Column 0: Agent Pool (fixed width) ----
+        pool = CollapsibleFrame(
+            columns_frame, text="Agent Pool",
+            column_index=0, expand_weight=0, collapse_weight=0,
+        )
+        pool.grid(row=0, column=0, sticky=(N, S, W, E), padx=(0, 2))
+        self._pool_collapsible = pool
+        pool_inner = Frame(pool.body)
+        pool_inner.pack(fill="both", expand=True)
+        pool_inner.columnconfigure(0, weight=1)
+        pool_inner.rowconfigure(0, weight=1)
 
-        self._agent_listbox = Listbox(agent_frame, width=22)
+        self._agent_listbox = Listbox(pool_inner, width=22)
         self._agent_listbox.grid(row=0, column=0, sticky=(N, S, W, E), pady=2)
-        agent_scroll = Scrollbar(agent_frame, command=self._agent_listbox.yview)
+        agent_scroll = Scrollbar(
+            pool_inner, command=self._agent_listbox.yview
+        )
         self._agent_listbox.configure(yscrollcommand=agent_scroll.set)
         agent_scroll.grid(row=0, column=1, sticky=(N, S))
-        self._agent_listbox.bind("<<ListboxSelect>>", lambda e: self._show_preview(self._agent_listbox))
+        self._agent_listbox.bind(
+            "<<ListboxSelect>>",
+            lambda e: self._show_preview(self._agent_listbox),
+        )
 
-        agent_btn_frame = Frame(agent_frame)
-        agent_btn_frame.grid(row=1, column=0, pady=2)
+        agent_btn_frame = Frame(pool_inner)
+        agent_btn_frame.grid(row=1, column=0, columnspan=2, pady=2)
         Button(
             agent_btn_frame,
             text="→ Prep",
@@ -166,73 +241,80 @@ class WorkflowApp:
             command=lambda: self._add_to_zone("final"),
         ).pack(side=LEFT, padx=1)
 
-        # Column 1: Workflow Builder + Preview in a PanedWindow (horizontal)
-        self._main_paned = ttk.PanedWindow(content, orient=HORIZONTAL)
-        self._main_paned.grid(row=0, column=1, sticky=(N, S, W, E), padx=2)
-        self._preview_ratio = None
-        self._main_paned.bind("<ButtonRelease-1>", self._on_sash_drag)
-
-        # Left pane: Workflow Builder
-        builder = Frame(self._main_paned)
-        builder.columnconfigure(0, weight=1)
-        builder.rowconfigure(0, weight=0)
-        builder.rowconfigure(1, weight=1)
-        builder.rowconfigure(2, weight=0)
-        builder.rowconfigure(3, weight=0)
-
-        self._main_paned.add(builder, weight=3)
+        # ---- Column 1: Flow Zones (flexible) ----
+        flow = CollapsibleFrame(
+            columns_frame, text="Flow Zones",
+            column_index=1, expand_weight=2, collapse_weight=0,
+        )
+        flow.grid(row=0, column=1, sticky=(N, S, W, E), padx=2)
+        self._flow_collapsible = flow
+        flow_inner = Frame(flow.body)
+        flow_inner.pack(fill="both", expand=True)
+        flow_inner.columnconfigure(0, weight=1)
+        flow_inner.rowconfigure(0, weight=0)
+        flow_inner.rowconfigure(1, weight=1)
+        flow_inner.rowconfigure(2, weight=0)
 
         self._build_zone(
-            builder, "Preparation Agent", "prep", 0, listbox_height=4
+            flow_inner, "Preparation Agent", "prep", 0, listbox_height=4
         )
-        self._build_zone(builder, "Loop Agents", "loop", 1)
+        self._build_zone(flow_inner, "Loop Agents", "loop", 1)
         self._build_zone(
-            builder, "Finalization Agent", "final", 2, listbox_height=4
+            flow_inner, "Finalization Agent", "final", 2, listbox_height=4
         )
 
-        # Configuration (below Finalization in builder column)
-        config_frame = ttk.LabelFrame(
-            builder, text="Configuration", padding=4
+        # ---- Column 2: Settings (fixed width) ----
+        settings = CollapsibleFrame(
+            columns_frame, text="Settings",
+            column_index=2, expand_weight=0, collapse_weight=0,
         )
-        config_frame.grid(row=3, column=0, sticky=(W, E), pady=2)
-        config_frame.columnconfigure(1, weight=1)
+        settings.grid(row=0, column=2, sticky=(N, S, W, E), padx=2)
+        self._settings_collapsible = settings
+        settings_inner = Frame(settings.body)
+        settings_inner.pack(fill="both", expand=True)
+        settings_inner.columnconfigure(1, weight=1)
 
-        row = 0
-        Label(config_frame, text="Max Loops:").grid(
-            row=row, column=0, sticky=W, pady=2
+        # Loop Control
+        Label(
+            settings_inner, text="Loop Control", font=("", 9, "bold")
+        ).grid(row=0, column=0, columnspan=2, sticky=W, pady=(4, 2))
+
+        Label(settings_inner, text="Max Loops:").grid(
+            row=1, column=0, sticky=W, pady=2
         )
         self._max_loops_var = StringVar(value="10")
-        Entry(config_frame, textvariable=self._max_loops_var, width=10).grid(
-            row=row, column=1, sticky=W, padx=4
-        )
-        row += 1
+        Entry(
+            settings_inner, textvariable=self._max_loops_var, width=10
+        ).grid(row=1, column=1, sticky=W, padx=4)
 
-        Label(config_frame, text="End Condition:").grid(
-            row=row, column=0, sticky=W, pady=2
+        Label(settings_inner, text="End Condition:").grid(
+            row=2, column=0, sticky=W, pady=2
         )
         self._end_condition_var = StringVar(value="is_complete == True")
         Entry(
-            config_frame, textvariable=self._end_condition_var, width=24
-        ).grid(row=row, column=1, sticky=W, padx=4)
-        row += 1
+            settings_inner, textvariable=self._end_condition_var, width=24
+        ).grid(row=2, column=1, sticky=W, padx=4)
 
         self._finalize_on_abort_var = BooleanVar(value=False)
         Checkbutton(
-            config_frame,
+            settings_inner,
             text="Finalize on Abort",
             variable=self._finalize_on_abort_var,
-        ).grid(row=row, column=0, columnspan=2, sticky=W, pady=2)
-        row += 1
+        ).grid(row=3, column=0, columnspan=2, sticky=W, pady=2)
 
-        sep = ttk.Separator(config_frame, orient="horizontal")
-        sep.grid(row=row, column=0, columnspan=2, sticky=(W, E), pady=4)
-        row += 1
+        sep = ttk.Separator(settings_inner, orient="horizontal")
+        sep.grid(row=4, column=0, columnspan=2, sticky=(W, E), pady=4)
 
-        Label(config_frame, text="Workdir:").grid(
-            row=row, column=0, sticky=W, pady=2
+        # Environment
+        Label(
+            settings_inner, text="Environment", font=("", 9, "bold")
+        ).grid(row=5, column=0, columnspan=2, sticky=W, pady=(4, 2))
+
+        Label(settings_inner, text="Workdir:").grid(
+            row=6, column=0, sticky=W, pady=2
         )
-        wd_frame = Frame(config_frame)
-        wd_frame.grid(row=row, column=1, sticky=(W, E), padx=4)
+        wd_frame = Frame(settings_inner)
+        wd_frame.grid(row=6, column=1, sticky=(W, E), padx=4)
         wd_frame.columnconfigure(0, weight=1)
         self._workdir_var = StringVar(value=os.getcwd())
         Entry(wd_frame, textvariable=self._workdir_var).pack(
@@ -241,13 +323,12 @@ class WorkflowApp:
         Button(
             wd_frame, text="Browse", command=self._browse_workdir
         ).pack(side=LEFT, padx=1)
-        row += 1
 
-        Label(config_frame, text="Init Script:").grid(
-            row=row, column=0, sticky=W, pady=2
+        Label(settings_inner, text="Init Script:").grid(
+            row=7, column=0, sticky=W, pady=2
         )
-        is_frame = Frame(config_frame)
-        is_frame.grid(row=row, column=1, sticky=(W, E), padx=4)
+        is_frame = Frame(settings_inner)
+        is_frame.grid(row=7, column=1, sticky=(W, E), padx=4)
         is_frame.columnconfigure(0, weight=1)
         self._init_script_var = StringVar()
         Entry(is_frame, textvariable=self._init_script_var).pack(
@@ -256,58 +337,70 @@ class WorkflowApp:
         Button(
             is_frame, text="Browse", command=self._browse_init_script
         ).pack(side=LEFT, padx=1)
-        row += 1
 
-        sep2 = ttk.Separator(config_frame, orient="horizontal")
-        sep2.grid(row=row, column=0, columnspan=2, sticky=(W, E), pady=4)
-        row += 1
+        sep2 = ttk.Separator(settings_inner, orient="horizontal")
+        sep2.grid(row=8, column=0, columnspan=2, sticky=(W, E), pady=4)
 
-        Label(config_frame, text="Model:").grid(
-            row=row, column=0, sticky=W, pady=2
+        # OpenCode Defaults
+        Label(
+            settings_inner, text="OpenCode Defaults", font=("", 9, "bold")
+        ).grid(row=9, column=0, columnspan=2, sticky=W, pady=(4, 2))
+
+        Label(settings_inner, text="Model:").grid(
+            row=10, column=0, sticky=W, pady=2
         )
         self._oc_model_var = StringVar()
-        Entry(config_frame, textvariable=self._oc_model_var, width=24).grid(
-            row=row, column=1, sticky=W, padx=4
-        )
-        row += 1
+        Entry(
+            settings_inner, textvariable=self._oc_model_var, width=24
+        ).grid(row=10, column=1, sticky=W, padx=4)
 
-        Label(config_frame, text="Agent:").grid(
-            row=row, column=0, sticky=W, pady=2
+        Label(settings_inner, text="Agent:").grid(
+            row=11, column=0, sticky=W, pady=2
         )
         self._oc_agent_var = StringVar()
         Entry(
-            config_frame, textvariable=self._oc_agent_var, width=24
-        ).grid(row=row, column=1, sticky=W, padx=4)
-        row += 1
+            settings_inner, textvariable=self._oc_agent_var, width=24
+        ).grid(row=11, column=1, sticky=W, padx=4)
 
-        Label(config_frame, text="Variant:").grid(
-            row=row, column=0, sticky=W, pady=2
+        Label(settings_inner, text="Variant:").grid(
+            row=12, column=0, sticky=W, pady=2
         )
         self._oc_variant_var = StringVar()
         Entry(
-            config_frame, textvariable=self._oc_variant_var, width=24
-        ).grid(row=row, column=1, sticky=W, padx=4)
-        row += 1
+            settings_inner, textvariable=self._oc_variant_var, width=24
+        ).grid(row=12, column=1, sticky=W, padx=4)
 
         self._oc_pure_var = BooleanVar(value=False)
         Checkbutton(
-            config_frame,
+            settings_inner,
             text="Pure Mode (no plugins)",
             variable=self._oc_pure_var,
-        ).grid(row=row, column=0, columnspan=2, sticky=W, pady=2)
-        row += 1
+        ).grid(row=13, column=0, columnspan=2, sticky=W, pady=2)
 
-        # Right pane: Agent Preview (always added to paned window)
-        self._preview_frame = ttk.LabelFrame(self._main_paned, text="Agent Preview", padding=4)
-        self._preview_frame.rowconfigure(0, weight=1)
-        self._preview_frame.columnconfigure(0, weight=1)
+        # ---- Column 3: Preview / Output (tabbed, flexible) ----
+        preview = CollapsibleFrame(
+            columns_frame, text="Preview / Output",
+            column_index=3, expand_weight=1, collapse_weight=0,
+        )
+        preview.grid(row=0, column=3, sticky=(N, S, W, E), padx=(2, 0))
+        self._preview_collapsible = preview
 
-        self._preview_text = Text(self._preview_frame, wrap="word", state="disabled")
+        notebook = ttk.Notebook(preview.body)
+        notebook.pack(fill="both", expand=True)
+
+        # Tab 1: Agent Preview
+        preview_tab = Frame(notebook)
+        preview_tab.columnconfigure(0, weight=1)
+        preview_tab.rowconfigure(0, weight=1)
+        notebook.add(preview_tab, text="Agent Preview")
+
+        self._preview_text = Text(
+            preview_tab, wrap="word", state="disabled"
+        )
         preview_scroll = Scrollbar(
-            self._preview_frame, command=self._preview_text.yview
+            preview_tab, command=self._preview_text.yview
         )
         self._preview_text.configure(yscrollcommand=preview_scroll.set)
-
         self._preview_text.grid(row=0, column=0, sticky=(N, S, W, E))
         preview_scroll.grid(row=0, column=1, sticky=(N, S))
 
@@ -315,12 +408,33 @@ class WorkflowApp:
         self._preview_text.insert("1.0", "Select an agent to preview")
         self._preview_text.configure(state="disabled")
 
-        self._main_paned.add(self._preview_frame, weight=1)
-        # Collapse preview on first idle event (after layout is complete)
+        # Tab 2: Live Output (placeholder for #26)
+        output_tab = Frame(notebook)
+        output_tab.columnconfigure(0, weight=1)
+        output_tab.rowconfigure(0, weight=1)
+        notebook.add(output_tab, text="Live Output")
 
-        self._root_paned.add(content, weight=3)
+        self._output_text = Text(
+            output_tab, wrap="word", state="disabled"
+        )
+        output_scroll = Scrollbar(
+            output_tab, command=self._output_text.yview
+        )
+        self._output_text.configure(yscrollcommand=output_scroll.set)
+        self._output_text.grid(row=0, column=0, sticky=(N, S, W, E))
+        output_scroll.grid(row=0, column=1, sticky=(N, S))
 
-        # Bottom: Log (always in paned window, collapsed via sash position)
+        self._output_text.configure(state="normal")
+        self._output_text.insert(
+            "1.0",
+            "Live agent output will appear here\n"
+            "(requires Issue #26)",
+        )
+        self._output_text.configure(state="disabled")
+
+        self._root_paned.add(columns_frame, weight=3)
+
+        # ---- Bottom: Execution Log ----
         self._log_frame = ttk.LabelFrame(
             self._root_paned, text="Execution Log", padding=4
         )
@@ -330,7 +444,9 @@ class WorkflowApp:
         self._log_text = Text(
             self._log_frame, height=10, wrap="word", state="disabled"
         )
-        log_scroll = Scrollbar(self._log_frame, command=self._log_text.yview)
+        log_scroll = Scrollbar(
+            self._log_frame, command=self._log_text.yview
+        )
         self._log_text.configure(yscrollcommand=log_scroll.set)
 
         self._log_text.grid(row=0, column=0, sticky=(N, S, W, E))
@@ -356,7 +472,10 @@ class WorkflowApp:
         scroll = Scrollbar(frame, command=listbox.yview)
         listbox.configure(yscrollcommand=scroll.set)
         scroll.grid(row=0, column=1, sticky=(N, S))
-        listbox.bind("<<ListboxSelect>>", lambda e, lb=listbox: self._show_preview(lb))
+        listbox.bind(
+            "<<ListboxSelect>>",
+            lambda e, lb=listbox: self._show_preview(lb),
+        )
         setattr(self, f"_{zone}_listbox", listbox)
 
         btn_frame = Frame(frame)
@@ -790,60 +909,3 @@ class WorkflowApp:
             pos = self._root_paned.sashpos(0)
             if 50 < pos < total - 50:
                 self._log_ratio = pos / total
-
-    def _toggle_preview(self) -> None:
-        if self._preview_collapsed.get():
-            self._preview_collapsed.set(False)
-            self._preview_toggle_btn.configure(text="Preview ▲")
-            self._restore_preview_ratio()
-        else:
-            self._save_preview_ratio()
-            self._preview_collapsed.set(True)
-            self._preview_toggle_btn.configure(text="Preview ▼")
-            self._collapse_preview()
-
-    def _init_preview_collapsed(self) -> None:
-        self._preview_ratio = None
-        self._collapse_preview()
-
-    def _save_preview_ratio(self) -> None:
-        total = self._main_paned.winfo_width()
-        if total > 50:
-            pos = self._main_paned.sashpos(0)
-            if 50 < pos < total - 50:
-                self._preview_ratio = pos / total
-
-    def _restore_preview_ratio(self) -> None:
-        if self._preview_collapsed.get():
-            return
-        self._main_paned.update_idletasks()
-        total = self._main_paned.winfo_width()
-        if total < 50:
-            self._main_paned.after(20, self._restore_preview_ratio)
-            return
-        if self._preview_ratio is not None:
-            pos = int(total * self._preview_ratio)
-        else:
-            pos = int(total * 0.75)
-        if pos < 150:
-            pos = int(total * 0.75)
-        if pos > total - 10:
-            pos = int(total * 0.75)
-        self._main_paned.sashpos(0, pos)
-
-    def _collapse_preview(self) -> None:
-        if not self._preview_collapsed.get():
-            return
-        self._main_paned.update_idletasks()
-        total = self._main_paned.winfo_width()
-        if total < 50:
-            self._main_paned.after(20, self._collapse_preview)
-            return
-        self._main_paned.sashpos(0, total - 2)
-
-    def _on_sash_drag(self, event) -> None:
-        total = self._main_paned.winfo_width()
-        if total > 50:
-            pos = self._main_paned.sashpos(0)
-            if 50 < pos < total - 50:
-                self._preview_ratio = pos / total
