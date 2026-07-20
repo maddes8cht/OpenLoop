@@ -105,14 +105,16 @@ class ExecutionEngine:
         stop_event: Optional[threading.Event] = None,
         no_log_file: bool = False,
         log_file: Optional[str] = None,
+        timeout: Optional[int] = None,
     ):
         self.config = config or Config()
         self.logger = logger or (lambda msg: print(f"[OpenLoop] {msg}"))
         self.state = WorkflowState()
         self.agent_loader = AgentLoader(self.config.agents_dir)
+        self._timeout = timeout if timeout is not None else self.config.default_timeout
         self.runner = OpenCodeRunner(
             binary=self.config.opencode_binary,
-            timeout=600,
+            timeout=self._timeout,
         )
         self._stop_event = stop_event or threading.Event()
         self._log_handle = None

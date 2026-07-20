@@ -90,6 +90,8 @@ class OpenCodeRunner:
         init_script: Optional[str] = None,
     ) -> RunResult:
         effective_timeout = timeout if timeout is not None else self.timeout
+        if effective_timeout == 0:
+            effective_timeout = None
         cmd = [self.binary, "run"]
         if opts:
             cmd += opts.to_cli_args()

@@ -161,6 +161,7 @@ class WorkflowApp:
         layout: str = "default",
         no_log_file: bool = False,
         log_file: Optional[str] = None,
+        timeout: Optional[int] = None,
     ) -> None:
         self._root = Tk()
         self._root.title("OpenLoop — Workflow Builder")
@@ -178,6 +179,7 @@ class WorkflowApp:
         self._opencode_defaults_raw = opencode_defaults_raw
         self._cli_no_log_file = no_log_file
         self._cli_log_file = log_file
+        self._cli_timeout = timeout
 
         self._build_ui()
         self._root.after_idle(self._init_preview_collapsed)
@@ -361,26 +363,34 @@ class WorkflowApp:
             settings_inner, textvariable=self._end_condition_var, width=24
         ).grid(row=2, column=1, sticky=W, padx=4)
 
+        self._timeout_var = StringVar(value="1800")
+        Label(settings_inner, text="Timeout (s):").grid(
+            row=3, column=0, sticky=W, pady=2
+        )
+        Entry(
+            settings_inner, textvariable=self._timeout_var, width=10
+        ).grid(row=3, column=1, sticky=W, padx=4)
+
         self._finalize_on_abort_var = BooleanVar(value=False)
         Checkbutton(
             settings_inner,
             text="Finalize on Abort",
             variable=self._finalize_on_abort_var,
-        ).grid(row=3, column=0, columnspan=2, sticky=W, pady=2)
+        ).grid(row=4, column=0, columnspan=2, sticky=W, pady=2)
 
         sep = ttk.Separator(settings_inner, orient="horizontal")
-        sep.grid(row=4, column=0, columnspan=2, sticky=(W, E), pady=4)
+        sep.grid(row=5, column=0, columnspan=2, sticky=(W, E), pady=4)
 
         # Environment
         Label(
             settings_inner, text="Environment", font=("", 9, "bold")
-        ).grid(row=5, column=0, columnspan=2, sticky=W, pady=(4, 2))
+        ).grid(row=6, column=0, columnspan=2, sticky=W, pady=(4, 2))
 
         Label(settings_inner, text="Workdir:").grid(
-            row=6, column=0, sticky=W, pady=2
+            row=7, column=0, sticky=W, pady=2
         )
         wd_frame = Frame(settings_inner)
-        wd_frame.grid(row=6, column=1, sticky=(W, E), padx=4)
+        wd_frame.grid(row=7, column=1, sticky=(W, E), padx=4)
         wd_frame.columnconfigure(0, weight=1)
         self._workdir_var = StringVar(value=os.getcwd())
         Entry(wd_frame, textvariable=self._workdir_var).pack(
@@ -391,10 +401,10 @@ class WorkflowApp:
         ).pack(side=LEFT, padx=1)
 
         Label(settings_inner, text="Init Script:").grid(
-            row=7, column=0, sticky=W, pady=2
+            row=8, column=0, sticky=W, pady=2
         )
         is_frame = Frame(settings_inner)
-        is_frame.grid(row=7, column=1, sticky=(W, E), padx=4)
+        is_frame.grid(row=8, column=1, sticky=(W, E), padx=4)
         is_frame.columnconfigure(0, weight=1)
         self._init_script_var = StringVar()
         Entry(is_frame, textvariable=self._init_script_var).pack(
@@ -405,58 +415,58 @@ class WorkflowApp:
         ).pack(side=LEFT, padx=1)
 
         sep2 = ttk.Separator(settings_inner, orient="horizontal")
-        sep2.grid(row=8, column=0, columnspan=2, sticky=(W, E), pady=4)
+        sep2.grid(row=9, column=0, columnspan=2, sticky=(W, E), pady=4)
 
         # OpenCode Defaults
         Label(
             settings_inner, text="OpenCode Defaults", font=("", 9, "bold")
-        ).grid(row=9, column=0, columnspan=2, sticky=W, pady=(4, 2))
+        ).grid(row=10, column=0, columnspan=2, sticky=W, pady=(4, 2))
 
         Label(settings_inner, text="Model:").grid(
-            row=10, column=0, sticky=W, pady=2
+            row=11, column=0, sticky=W, pady=2
         )
         self._oc_model_var = StringVar()
         Entry(
             settings_inner, textvariable=self._oc_model_var, width=24
-        ).grid(row=10, column=1, sticky=W, padx=4)
+        ).grid(row=11, column=1, sticky=W, padx=4)
 
         Label(settings_inner, text="Agent:").grid(
-            row=11, column=0, sticky=W, pady=2
+            row=12, column=0, sticky=W, pady=2
         )
         self._oc_agent_var = StringVar()
         Entry(
             settings_inner, textvariable=self._oc_agent_var, width=24
-        ).grid(row=11, column=1, sticky=W, padx=4)
+        ).grid(row=12, column=1, sticky=W, padx=4)
 
         Label(settings_inner, text="Variant:").grid(
-            row=12, column=0, sticky=W, pady=2
+            row=13, column=0, sticky=W, pady=2
         )
         self._oc_variant_var = StringVar()
         Entry(
             settings_inner, textvariable=self._oc_variant_var, width=24
-        ).grid(row=12, column=1, sticky=W, padx=4)
+        ).grid(row=13, column=1, sticky=W, padx=4)
 
         self._oc_pure_var = BooleanVar(value=False)
         Checkbutton(
             settings_inner,
             text="Pure Mode (no plugins)",
             variable=self._oc_pure_var,
-        ).grid(row=13, column=0, columnspan=2, sticky=W, pady=2)
+        ).grid(row=14, column=0, columnspan=2, sticky=W, pady=2)
 
         # Logging
         sep3 = ttk.Separator(settings_inner, orient="horizontal")
-        sep3.grid(row=14, column=0, columnspan=2, sticky=(W, E), pady=4)
+        sep3.grid(row=15, column=0, columnspan=2, sticky=(W, E), pady=4)
 
         Label(
             settings_inner, text="Logging", font=("", 9, "bold")
-        ).grid(row=15, column=0, columnspan=2, sticky=W, pady=(4, 2))
+        ).grid(row=16, column=0, columnspan=2, sticky=W, pady=(4, 2))
 
         self._log_dir_var = StringVar(value=".openloop")
         Label(settings_inner, text="Log Dir:").grid(
-            row=16, column=0, sticky=W, pady=2
+            row=17, column=0, sticky=W, pady=2
         )
         ld_frame = Frame(settings_inner)
-        ld_frame.grid(row=16, column=1, sticky=(W, E), padx=4)
+        ld_frame.grid(row=17, column=1, sticky=(W, E), padx=4)
         ld_frame.columnconfigure(0, weight=1)
         Entry(ld_frame, textvariable=self._log_dir_var).pack(
             side=LEFT, fill="x", expand=True
@@ -471,13 +481,13 @@ class WorkflowApp:
             text="Disable file logging",
             variable=self._no_log_file_var,
             command=self._update_log_status,
-        ).grid(row=17, column=0, columnspan=2, sticky=W, pady=2)
+        ).grid(row=18, column=0, columnspan=2, sticky=W, pady=2)
 
         self._log_status_label = Label(
             settings_inner, text="", fg="gray", anchor=W, justify=LEFT
         )
         self._log_status_label.grid(
-            row=18, column=0, columnspan=2, sticky=(W, E), pady=(0, 4), padx=4
+            row=19, column=0, columnspan=2, sticky=(W, E), pady=(0, 4), padx=4
         )
 
         # ---- Column 2: Preview / Output (tabbed, flexible) ----
@@ -910,6 +920,7 @@ class WorkflowApp:
             self._no_log_file_var.set(self._config.no_log_file)
             if self._cli_no_log_file:
                 self._no_log_file_var.set(True)
+            self._timeout_var.set(str(self._config.default_timeout))
         self._update_log_status()
 
     # ---- Execution ----
@@ -946,10 +957,14 @@ class WorkflowApp:
             cfg = self._config if isinstance(self._config, Config) else Config()
             cfg.log_dir = self._log_dir_var.get().strip() or ".openloop"
             no_log = self._no_log_file_var.get() or self._cli_no_log_file
+            raw_timeout = self._timeout_var.get().strip()
+            gui_timeout = int(raw_timeout) if raw_timeout else None
+            timeout = self._cli_timeout if self._cli_timeout is not None else gui_timeout
             self._stop_event.clear()
             self._engine = ExecutionEngine(
                 config=cfg, logger=self._log, stop_event=self._stop_event,
                 no_log_file=no_log, log_file=self._cli_log_file,
+                timeout=timeout,
             )
         except ImportError as exc:
             messagebox.showerror("Error", f"Missing core module: {exc}")

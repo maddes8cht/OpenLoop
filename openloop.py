@@ -68,6 +68,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Explicit log file path (auto-generated timestamp name by default)",
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="Subprocess timeout in seconds (0 = no timeout, default: 1800)",
+    )
     return parser.parse_args(argv)
 
 
@@ -124,6 +130,7 @@ def _run_cli(args: argparse.Namespace, config) -> None:
             config=cfg,
             no_log_file=args.no_log_file,
             log_file=args.log_file,
+            timeout=args.timeout,
         )
         engine.execute_workflow_data(data)
 
@@ -158,6 +165,7 @@ def _run_gui(args: argparse.Namespace, config) -> None:
         layout=args.layout,
         no_log_file=args.no_log_file,
         log_file=args.log_file,
+        timeout=args.timeout,
     )
     try:
         app.run()

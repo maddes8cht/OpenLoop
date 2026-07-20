@@ -29,6 +29,7 @@ class Config:
     opencode_defaults: OpenCodeOptions = field(default_factory=OpenCodeOptions)
     log_dir: str = ".openloop"
     no_log_file: bool = False
+    default_timeout: int = 1800
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Config":
@@ -76,6 +77,7 @@ class Config:
             opencode_defaults=opencode_opts,
             log_dir=str(raw.get("log_dir", cls.log_dir)),
             no_log_file=bool(raw.get("no_log_file", cls.no_log_file)),
+            default_timeout=int(raw.get("default_timeout", cls.default_timeout)),
         )
 
     def _validate(self) -> None:
