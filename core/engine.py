@@ -98,6 +98,9 @@ LogCallback = Callable[[str], None]
 
 
 class ExecutionEngine:
+    STATE_FILE = ".openloop/state_update.json"
+    MAX_CORRECTIONS = 2
+
     def __init__(
         self,
         config: Optional[Config] = None,
@@ -163,6 +166,59 @@ class ExecutionEngine:
             f"Agent: {agent_name} | Phase: {self.state.current_phase} | "
             f"Iteration: {self.state.iteration}\n"
             f"{'='*70}\n\n"
+        )
+
+    # ---- State file helpers ----
+
+    @property
+    def _effective_workdir(self) -> str:
+        return self._workdir or str(Path.cwd())
+
+    def _ensure_state_dir(self) -> None:
+        Path(self._effective_workdir, ".openloop").mkdir(parents=True, exist_ok=True)
+
+    def _state_file_path(self) -> Path:
+        return Path(self._effective_workdir) / self.STATE_FILE
+
+    def _read_state_file(self) -> Optional[dict]:
+        path = self._state_file_path()
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        return data
+
+    def _delete_state_file(self) -> None:
+        path = self._state_file_path()
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    def _build_correction_prompt(self, error: str, agent_name: str) -> str:
+        return (
+            f"The engine could not find or parse the state file at "
+            f"`.openloop/state_update.json`.\n"
+            f"Error: {error}\n\n"
+            f"Please write the updated state to `.openloop/state_update.json` "
+            f"as valid JSON. The JSON object may contain:\n"
+            f"- is_complete (bool)\n"
+            f"- termination_reason (str)\n"
+            f"- payload (dict) — for all workflow-specific data\n\n"
+            f"Example:\n"
+            f"```json\n"
+            f"{{\n"
+            f'  "is_complete": false,\n'
+            f'  "payload": {{\n'
+            f'    "result": "completed task"\n'
+            f"  }}\n"
+            f"}}\n"
+            f"```\n"
         )
 
     def execute_workflow(
@@ -281,38 +337,60 @@ class ExecutionEngine:
 
     def _execute_agent(self, agent_name: str) -> None:
         agent = self.agent_loader.get_agent(agent_name)
-        prompt = self._build_prompt(agent)
+        self._ensure_state_dir()
         self._write_banner(agent_name)
 
-        result = self.runner.run(
-            prompt,
-            opts=getattr(self, "_opencode_opts", None),
-            cwd=getattr(self, "_workdir", None),
-            init_script=getattr(self, "_init_script", None),
-        )
+        prompt = self._build_prompt(agent)
+        state_data = None
 
-        if result.output:
-            self._write_log(f"[stdout]\n{result.output}\n\n")
-        if result.error:
-            self._write_log(f"[stderr]\n{result.error}\n\n")
+        for attempt in range(1 + self.MAX_CORRECTIONS):
+            result = self.runner.run(
+                prompt,
+                opts=getattr(self, "_opencode_opts", None),
+                cwd=getattr(self, "_workdir", None),
+                init_script=getattr(self, "_init_script", None),
+                continue_session=(attempt > 0),
+            )
 
-        if not result.success:
-            self.log(f"  Agent '{agent_name}' failed (exit {result.exit_code})")
-            self.state.termination_reason = f"agent_error:{agent_name}"
-            return
+            if result.output:
+                self._write_log(f"[stdout]\n{result.output}\n\n")
+            if result.error:
+                self._write_log(f"[stderr]\n{result.error}\n\n")
 
-        update = StateParser.extract_state_update(result.output)
-        if update is not None:
+            if not result.success:
+                self.log(f"  Agent '{agent_name}' failed (exit {result.exit_code})")
+                self.state.termination_reason = f"agent_error:{agent_name}"
+                return
+
+            state_data = self._read_state_file()
+            if state_data is not None:
+                break
+
+            if attempt < self.MAX_CORRECTIONS:
+                self.log(
+                    f"  State file missing or invalid — "
+                    f"correction attempt {attempt + 1}/{self.MAX_CORRECTIONS}"
+                )
+                prompt = self._build_correction_prompt(
+                    "state_update.json was not found or was not valid JSON",
+                    agent_name,
+                )
+            else:
+                self.log("  Max corrections reached — falling back to stdout parsing")
+                state_data = StateParser.extract_state_update(result.output)
+
+        if state_data is not None:
             KNOWN_KEYS = {"current_phase", "iteration", "is_complete", "termination_reason", "payload"}
-            unknown = [k for k in update if k not in KNOWN_KEYS]
+            unknown = [k for k in state_data if k not in KNOWN_KEYS]
             if unknown:
                 self.log(
                     f"  WARNING: Unknown top-level key(s) in state update from "
                     f"'{agent_name}': {unknown}. "
                     f"These will be ignored. Put custom data inside 'payload' instead."
                 )
-            self.state.merge(update)
-            self.log(f"  State updated: {json.dumps(update)}")
+            self.state.merge(state_data)
+            self._delete_state_file()
+            self.log(f"  State updated: {json.dumps(state_data)}")
         else:
             self.log(
                 f"  WARNING: No state update found in output from '{agent_name}'"
@@ -327,10 +405,13 @@ class ExecutionEngine:
             f"{state_json}\n"
             f"```\n\n"
             f"Execute your role based on the instructions above. "
-            f"After completing your task, output a state update "
-            f"inside a <state_update> XML tag with any changes "
-            f"to the state (especially set is_complete to true "
-            f"when you are satisfied)."
+            f"After completing your task, write the current state to "
+            f"`.openloop/state_update.json` as valid JSON with this structure:\n"
+            f"- is_complete (bool)\n"
+            f"- termination_reason (str)\n"
+            f"- payload (dict) — all custom data goes here\n"
+            f"You may ALSO include a <state_update> XML tag in your response "
+            f"as a secondary method."
         )
 
     def _evaluate_end_condition(self, condition: str) -> bool:

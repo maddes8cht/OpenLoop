@@ -1135,7 +1135,7 @@ class TestExecutionEngine:
         ]
         idx = [0]
 
-        def slow_run(prompt, opts=None, timeout=None, cwd=None, init_script=None):
+        def slow_run(prompt, opts=None, timeout=None, cwd=None, init_script=None, **kwargs):
             time.sleep(0.05)
             r = responses[idx[0] % len(responses)]
             idx[0] += 1
@@ -1315,7 +1315,7 @@ class TestExecutionEngine:
         engine = ExecutionEngine()
         prompts = []
 
-        def capture_run(prompt, timeout=None):
+        def capture_run(prompt, timeout=None, **kwargs):
             prompts.append(prompt)
             return self._make_mock_runner(
                 [
@@ -1325,7 +1325,13 @@ class TestExecutionEngine:
 
         engine.runner = MagicMock()
         engine.runner.run.side_effect = [
+            # Agent "a" — 3 calls (initial + 2 corrections) then fallback to stdout
             type("R", (), {"success": True, "output": '<state_update>{"payload": {"step": 1}}</state_update>', "error": "", "exit_code": 0})(),
+            type("R", (), {"success": True, "output": '<state_update>{"payload": {"step": 1}}</state_update>', "error": "", "exit_code": 0})(),
+            type("R", (), {"success": True, "output": '<state_update>{"payload": {"step": 1}}</state_update>', "error": "", "exit_code": 0})(),
+            # Agent "b" — 3 calls
+            type("R", (), {"success": True, "output": '<state_update>{"is_complete": true, "payload": {"step": 2}}</state_update>', "error": "", "exit_code": 0})(),
+            type("R", (), {"success": True, "output": '<state_update>{"is_complete": true, "payload": {"step": 2}}</state_update>', "error": "", "exit_code": 0})(),
             type("R", (), {"success": True, "output": '<state_update>{"is_complete": true, "payload": {"step": 2}}</state_update>', "error": "", "exit_code": 0})(),
         ]
         engine.agent_loader = self._make_mock_agent_loader({"a": "First", "b": "Second"})
@@ -1359,7 +1365,7 @@ class TestExecutionEngine:
         calls = []
 
         class TrackingRunner:
-            def run(self, prompt, opts=None, timeout=None, cwd=None, init_script=None):
+            def run(self, prompt, opts=None, timeout=None, cwd=None, init_script=None, **kwargs):
                 calls.append(opts)
                 return type("R", (), {"success": True, "output": '<state_update>{"is_complete": true}</state_update>', "error": "", "exit_code": 0})()
 
@@ -1380,7 +1386,7 @@ class TestExecutionEngine:
             "end_state_condition": "is_complete == True",
         })
 
-        assert len(calls) == 1
+        assert len(calls) == 3  # initial + 2 corrections before stdout fallback
         passed_opts = calls[0]
         assert passed_opts.model == "gpt-4"
         assert passed_opts.agent == "build"
@@ -1397,7 +1403,7 @@ class TestExecutionEngine:
         calls = []
 
         class TrackingRunner:
-            def run(self, prompt, opts=None, timeout=None, cwd=None, init_script=None):
+            def run(self, prompt, opts=None, timeout=None, cwd=None, init_script=None, **kwargs):
                 calls.append(opts)
                 return type("R", (), {"success": True, "output": '<state_update>{"is_complete": true}</state_update>', "error": "", "exit_code": 0})()
 
@@ -1419,7 +1425,7 @@ class TestExecutionEngine:
             "opencode_defaults": {"model": "claude"},
         })
 
-        assert len(calls) == 1
+        assert len(calls) == 3  # initial + 2 corrections before stdout fallback
         passed_opts = calls[0]
         assert passed_opts.model == "claude"
         assert passed_opts.agent == "build"
@@ -1433,7 +1439,7 @@ class TestExecutionEngine:
         ]
         idx = [0]
 
-        def side_effect(prompt, opts=None, timeout=None, cwd=None, init_script=None):
+        def side_effect(prompt, opts=None, timeout=None, cwd=None, init_script=None, **kwargs):
             r = responses[idx[0] % len(responses)]
             idx[0] += 1
             return type("R", (), dict(r, error="", exit_code=0 if r["success"] else 1))()
