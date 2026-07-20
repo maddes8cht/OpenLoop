@@ -782,26 +782,34 @@ class WorkflowApp:
             if self._workflow_path:
                 messagebox.showerror("Error", str(exc))
 
+    @property
+    def _openloop_dir(self) -> Path:
+        return Path(__file__).resolve().parent.parent
+
     def _load_workflow(self) -> None:
+        wf_dir = self._config.workflows_dir if self._config else "./workflows"
+        p = Path(wf_dir)
+        if not p.is_absolute():
+            p = self._openloop_dir / p
         path = filedialog.askopenfilename(
             title="Load Workflow",
             filetypes=[("JSON files", "*.json")],
-            initialdir=self._config.workflows_dir
-            if self._config
-            else "./workflows",
+            initialdir=str(p),
         )
         if not path:
             return
         self._load_workflow_from_path(path)
 
     def _save_workflow(self) -> None:
+        wf_dir = self._config.workflows_dir if self._config else "./workflows"
+        p = Path(wf_dir)
+        if not p.is_absolute():
+            p = self._openloop_dir / p
         path = filedialog.asksaveasfilename(
             title="Save Workflow",
             defaultextension=".json",
             filetypes=[("JSON files", "*.json")],
-            initialdir=self._config.workflows_dir
-            if self._config
-            else "./workflows",
+            initialdir=str(p),
         )
         if not path:
             return
@@ -821,16 +829,25 @@ class WorkflowApp:
         self._root.title(title)
 
     def _browse_workdir(self) -> None:
+        wd = self._workdir_var.get().strip()
+        initial = wd if wd else os.getcwd()
         path = filedialog.askdirectory(
             title="Select Working Directory",
+            initialdir=initial,
         )
         if path:
             self._workdir_var.set(path)
             self._update_title()
 
     def _browse_init_script(self) -> None:
+        current = self._init_script_var.get().strip()
+        if current:
+            initial = str(Path(current).parent)
+        else:
+            initial = str(self._openloop_dir / "init")
         path = filedialog.askopenfilename(
             title="Select Init Script",
+            initialdir=initial,
             filetypes=[
                 ("Script files", "*.ps1 *.bat *.cmd *.sh"),
                 ("PowerShell", "*.ps1"),
@@ -843,8 +860,16 @@ class WorkflowApp:
             self._init_script_var.set(path)
 
     def _browse_log_dir(self) -> None:
+        from pathlib import Path
+        log_dir = self._log_dir_var.get().strip() or ".openloop"
+        p = Path(log_dir)
+        if not p.is_absolute():
+            wd = self._workdir_var.get().strip()
+            if wd:
+                p = Path(wd) / log_dir
         path = filedialog.askdirectory(
             title="Select Log Directory",
+            initialdir=str(p),
         )
         if path:
             self._log_dir_var.set(path)
