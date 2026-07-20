@@ -520,7 +520,8 @@ class WorkflowApp:
 
     def _load_workflow_from_path(self, path: str) -> None:
         try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            from core.config import strip_jsonc
+            data = json.loads(strip_jsonc(Path(path).read_text(encoding="utf-8")))
             self._load_workflow_into_ui(data)
             self._workflow_path = path
             self._workflow_path_var.set(path)

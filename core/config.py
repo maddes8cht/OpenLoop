@@ -12,7 +12,7 @@ CONFIG_FILENAME = "openloop.json"
 _OPENLOOP_DIR = Path(__file__).resolve().parent.parent
 
 
-def _strip_jsonc(text: str) -> str:
+def strip_jsonc(text: str) -> str:
     text = re.sub(r"//.*", "", text)
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
     return text
@@ -51,7 +51,7 @@ class Config:
 
         try:
             content = config_path.read_text(encoding="utf-8")
-            raw = json.loads(_strip_jsonc(content))
+            raw = json.loads(strip_jsonc(content))
         except json.JSONDecodeError as exc:
             raise ValueError(
                 f"{config_path.name} is not valid JSON: {exc}"

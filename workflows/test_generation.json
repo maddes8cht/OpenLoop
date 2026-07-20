@@ -1,4 +1,7 @@
 {
+  // Simple test-generation workflow for repos WITHOUT existing tests.
+  // Amala analyses the codebase, Vera generates/improves tests.
+  // No preparation agent needed — starts generating right away.
   "preparation_agent": null,
   "loop_agents": ["amala", "vera"],
   "finalization_agent": null,

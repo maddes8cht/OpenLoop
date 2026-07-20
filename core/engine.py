@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from core.agent import AgentDefinition, AgentLoader
-from core.config import Config
+from core.config import Config, strip_jsonc
 from core.parser import StateParser
 from core.runner import OpenCodeOptions, OpenCodeRunner, RunResult
 from core.state import WorkflowState
@@ -27,7 +27,7 @@ class WorkflowConfig:
     def load(cls, path: str | Path) -> "WorkflowConfig":
         p = Path(path)
         try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
+            raw = json.loads(strip_jsonc(p.read_text(encoding="utf-8")))
         except FileNotFoundError:
             raise FileNotFoundError(f"Workflow not found: {p}")
         except json.JSONDecodeError as exc:

@@ -1,15 +1,19 @@
 {
+  // Test-generation workflow for repos WITH existing tests.
+  // Proteus first analyses the existing test suite, then hands off
+  // to Amala (code analysis) and Vera (test generation/improvement).
+  // workdir and init_script are examples — adjust for your repo.
   "preparation_agents": [
     "Proteus"
   ],
   "loop_agents": [
-    "amala",
-    "vera"
+    "Amala",
+    "Vera"
   ],
   "finalization_agents": [],
   "max_loops": 10,
   "end_state_condition": "is_complete == True",
   "finalize_on_abort": false,
-  "workdir": "G:/GitHub/pypeline",
-  "init_script": "G:/GitHub/OpenLoop/init/yfinance-env.cmd"
+  "workdir": "G:\\GitHub\\Traders",
+  "init_script": "init\\yfinance-env.cmd"
 }
