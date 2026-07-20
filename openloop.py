@@ -57,6 +57,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="default",
         help="GUI layout preset (default: %(default)s)",
     )
+    parser.add_argument(
+        "--no-log-file",
+        action="store_true",
+        help="Disable file logging",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="Explicit log file path (auto-generated timestamp name by default)",
+    )
     return parser.parse_args(argv)
 
 
@@ -109,7 +120,11 @@ def _run_cli(args: argparse.Namespace, config) -> None:
                 print(f"Error: Invalid --opencode-defaults JSON: {exc}")
                 sys.exit(1)
 
-        engine = ExecutionEngine(config=cfg)
+        engine = ExecutionEngine(
+            config=cfg,
+            no_log_file=args.no_log_file,
+            log_file=args.log_file,
+        )
         engine.execute_workflow_data(data)
 
         state = engine.state
@@ -141,6 +156,8 @@ def _run_gui(args: argparse.Namespace, config) -> None:
         opencode_defaults_raw=args.opencode_defaults,
         fullscreen=args.fullscreen,
         layout=args.layout,
+        no_log_file=args.no_log_file,
+        log_file=args.log_file,
     )
     try:
         app.run()

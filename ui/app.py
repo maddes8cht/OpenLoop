@@ -159,6 +159,8 @@ class WorkflowApp:
         opencode_defaults_raw: Optional[str] = None,
         fullscreen: bool = False,
         layout: str = "default",
+        no_log_file: bool = False,
+        log_file: Optional[str] = None,
     ) -> None:
         self._root = Tk()
         self._root.title("OpenLoop — Workflow Builder")
@@ -174,6 +176,8 @@ class WorkflowApp:
         self._running = False
         self._log_queue: queue.Queue = queue.Queue()
         self._opencode_defaults_raw = opencode_defaults_raw
+        self._cli_no_log_file = no_log_file
+        self._cli_log_file = log_file
 
         self._build_ui()
         self._root.after_idle(self._init_preview_collapsed)
@@ -438,6 +442,43 @@ class WorkflowApp:
             text="Pure Mode (no plugins)",
             variable=self._oc_pure_var,
         ).grid(row=13, column=0, columnspan=2, sticky=W, pady=2)
+
+        # Logging
+        sep3 = ttk.Separator(settings_inner, orient="horizontal")
+        sep3.grid(row=14, column=0, columnspan=2, sticky=(W, E), pady=4)
+
+        Label(
+            settings_inner, text="Logging", font=("", 9, "bold")
+        ).grid(row=15, column=0, columnspan=2, sticky=W, pady=(4, 2))
+
+        self._log_dir_var = StringVar(value=".openloop")
+        Label(settings_inner, text="Log Dir:").grid(
+            row=16, column=0, sticky=W, pady=2
+        )
+        ld_frame = Frame(settings_inner)
+        ld_frame.grid(row=16, column=1, sticky=(W, E), padx=4)
+        ld_frame.columnconfigure(0, weight=1)
+        Entry(ld_frame, textvariable=self._log_dir_var).pack(
+            side=LEFT, fill="x", expand=True
+        )
+        Button(
+            ld_frame, text="Browse", command=self._browse_log_dir
+        ).pack(side=LEFT, padx=1)
+
+        self._no_log_file_var = BooleanVar(value=False)
+        Checkbutton(
+            settings_inner,
+            text="Disable file logging",
+            variable=self._no_log_file_var,
+            command=self._update_log_status,
+        ).grid(row=17, column=0, columnspan=2, sticky=W, pady=2)
+
+        self._log_status_label = Label(
+            settings_inner, text="", fg="gray", anchor=W, justify=LEFT
+        )
+        self._log_status_label.grid(
+            row=18, column=0, columnspan=2, sticky=(W, E), pady=(0, 4), padx=4
+        )
 
         # ---- Column 2: Preview / Output (tabbed, flexible) ----
         preview = CollapsibleFrame(
@@ -801,6 +842,31 @@ class WorkflowApp:
         if path:
             self._init_script_var.set(path)
 
+    def _browse_log_dir(self) -> None:
+        path = filedialog.askdirectory(
+            title="Select Log Directory",
+        )
+        if path:
+            self._log_dir_var.set(path)
+            self._update_log_status()
+
+    def _update_log_status(self) -> None:
+        if self._no_log_file_var.get():
+            self._log_status_label.config(text="File logging disabled")
+        else:
+            from datetime import datetime
+            from pathlib import Path
+            log_dir = self._log_dir_var.get().strip() or ".openloop"
+            p = Path(log_dir)
+            if not p.is_absolute():
+                wd = self._workdir_var.get().strip()
+                if wd:
+                    p = Path(wd) / log_dir
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            self._log_status_label.config(
+                text=f"Logging to: {p / f'openloop-run-{ts}.log'}"
+            )
+
     # ---- Configuration ----
 
     def _load_config(self) -> None:
@@ -813,6 +879,13 @@ class WorkflowApp:
         except Exception as exc:
             self._log(f"Config warning: {exc}")
             self._config = None
+
+        if self._config:
+            self._log_dir_var.set(self._config.log_dir)
+            self._no_log_file_var.set(self._config.no_log_file)
+            if self._cli_no_log_file:
+                self._no_log_file_var.set(True)
+        self._update_log_status()
 
     # ---- Execution ----
 
@@ -846,9 +919,12 @@ class WorkflowApp:
             from core.engine import ExecutionEngine
 
             cfg = self._config if isinstance(self._config, Config) else Config()
+            cfg.log_dir = self._log_dir_var.get().strip() or ".openloop"
+            no_log = self._no_log_file_var.get() or self._cli_no_log_file
             self._stop_event.clear()
             self._engine = ExecutionEngine(
-                config=cfg, logger=self._log, stop_event=self._stop_event
+                config=cfg, logger=self._log, stop_event=self._stop_event,
+                no_log_file=no_log, log_file=self._cli_log_file,
             )
         except ImportError as exc:
             messagebox.showerror("Error", f"Missing core module: {exc}")

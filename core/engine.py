@@ -1,6 +1,7 @@
 import json
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -102,6 +103,8 @@ class ExecutionEngine:
         config: Optional[Config] = None,
         logger: Optional[LogCallback] = None,
         stop_event: Optional[threading.Event] = None,
+        no_log_file: bool = False,
+        log_file: Optional[str] = None,
     ):
         self.config = config or Config()
         self.logger = logger or print
@@ -112,6 +115,53 @@ class ExecutionEngine:
             timeout=600,
         )
         self._stop_event = stop_event or threading.Event()
+        self._log_handle = None
+        self._log_path: Optional[Path] = None
+        self._no_log_file = no_log_file
+        self._log_file_arg = log_file
+
+    # ---- File logging ----
+
+    def _init_log(self, workdir: Optional[str] = None) -> None:
+        if self._no_log_file:
+            return
+        if self._log_file_arg:
+            self._log_path = Path(self._log_file_arg)
+        else:
+            log_dir = Path(self.config.log_dir)
+            if not log_dir.is_absolute() and workdir:
+                log_dir = Path(workdir) / log_dir
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            self._log_path = log_dir / f"openloop-run-{ts}.log"
+        self._log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._log_handle = self._log_path.open("w", encoding="utf-8")
+        self._write_log(
+            f"OpenLoop run started at "
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        )
+
+    def _close_log(self) -> None:
+        if self._log_handle:
+            self._write_log(
+                f"\nOpenLoop run finished at "
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            )
+            self._log_handle.close()
+            self._log_handle = None
+
+    def _write_log(self, text: str) -> None:
+        if self._log_handle:
+            self._log_handle.write(text)
+            self._log_handle.flush()
+
+    def _write_banner(self, agent_name: str) -> None:
+        self._write_log(
+            f"{'='*70}\n"
+            f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
+            f"Agent: {agent_name} | Phase: {self.state.current_phase} | "
+            f"Iteration: {self.state.iteration}\n"
+            f"{'='*70}\n\n"
+        )
 
     def execute_workflow(
         self, workflow_path: str | Path
@@ -125,6 +175,7 @@ class ExecutionEngine:
         self.log(f"Loaded workflow: {workflow.loop_agents}")
 
         self._workdir = workflow.workdir or self.config.workdir
+        self._init_log(self._workdir)
         self._init_script = workflow.init_script or self.config.init_script
         if "max_loops" not in data:
             workflow.max_loops = self.config.default_max_loops
@@ -132,15 +183,18 @@ class ExecutionEngine:
             workflow.opencode_defaults
         )
 
-        self._run_preparation(workflow)
-        if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
-            return self.state
-        self._run_loop(workflow)
-        if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
-            return self.state
-        self._run_finalization(workflow)
+        try:
+            self._run_preparation(workflow)
+            if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+                return self.state
+            self._run_loop(workflow)
+            if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+                return self.state
+            self._run_finalization(workflow)
 
-        return self.state
+            return self.state
+        finally:
+            self._close_log()
 
     def _run_preparation(self, workflow: WorkflowConfig) -> None:
         if not workflow.preparation_agents:
@@ -218,12 +272,19 @@ class ExecutionEngine:
     def _execute_agent(self, agent_name: str) -> None:
         agent = self.agent_loader.get_agent(agent_name)
         prompt = self._build_prompt(agent)
+        self._write_banner(agent_name)
+
         result = self.runner.run(
             prompt,
             opts=getattr(self, "_opencode_opts", None),
             cwd=getattr(self, "_workdir", None),
             init_script=getattr(self, "_init_script", None),
         )
+
+        if result.output:
+            self._write_log(f"[stdout]\n{result.output}\n\n")
+        if result.error:
+            self._write_log(f"[stderr]\n{result.error}\n\n")
 
         if not result.success:
             self.log(f"  Agent '{agent_name}' failed (exit {result.exit_code})")
@@ -282,3 +343,4 @@ class ExecutionEngine:
 
     def log(self, message: str) -> None:
         self.logger(f"[OpenLoop] {message}")
+        self._write_log(f"[OpenLoop] {message}\n")

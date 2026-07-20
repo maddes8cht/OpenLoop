@@ -27,6 +27,8 @@ class Config:
     workdir: Optional[str] = None
     init_script: Optional[str] = None
     opencode_defaults: OpenCodeOptions = field(default_factory=OpenCodeOptions)
+    log_dir: str = ".openloop"
+    no_log_file: bool = False
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Config":
@@ -72,6 +74,8 @@ class Config:
             workdir=raw.get("workdir"),
             init_script=raw.get("init_script"),
             opencode_defaults=opencode_opts,
+            log_dir=str(raw.get("log_dir", cls.log_dir)),
+            no_log_file=bool(raw.get("no_log_file", cls.no_log_file)),
         )
 
     def _validate(self) -> None:

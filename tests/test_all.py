@@ -1369,6 +1369,8 @@ class TestExecutionEngine:
             "opencode_defaults": OpenCodeOptions(model="gpt-4", agent="build"),
             "workdir": None,
             "init_script": None,
+            "log_dir": ".openloop",
+            "no_log_file": False,
         })()
 
         engine.execute_workflow_data({
@@ -1405,6 +1407,8 @@ class TestExecutionEngine:
             "opencode_defaults": OpenCodeOptions(model="gpt-4", agent="build"),
             "workdir": None,
             "init_script": None,
+            "log_dir": ".openloop",
+            "no_log_file": False,
         })()
 
         engine.execute_workflow_data({
