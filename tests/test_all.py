@@ -960,7 +960,7 @@ class TestExecutionEngine:
         logs = []
         engine = ExecutionEngine(logger=logs.append)
         engine.log("hello")
-        assert "[OpenLoop] hello" in logs
+        assert "hello" in logs
 
     def test_execute_workflow_empty_loop(self):
         from core.engine import ExecutionEngine
@@ -1344,7 +1344,8 @@ class TestExecutionEngine:
         logs = []
         engine = ExecutionEngine(logger=logs.append)
         engine.log("test message")
-        assert "[OpenLoop] test message" in logs
+        assert "test message" in logs
+        assert "[OpenLoop]" not in logs[-1]
 
     def test_opencode_defaults_merged_and_passed_to_runner(self, tmp_path):
         from core.engine import ExecutionEngine

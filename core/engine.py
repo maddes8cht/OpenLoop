@@ -107,7 +107,7 @@ class ExecutionEngine:
         log_file: Optional[str] = None,
     ):
         self.config = config or Config()
-        self.logger = logger or print
+        self.logger = logger or (lambda msg: print(f"[OpenLoop] {msg}"))
         self.state = WorkflowState()
         self.agent_loader = AgentLoader(self.config.agents_dir)
         self.runner = OpenCodeRunner(
@@ -176,7 +176,15 @@ class ExecutionEngine:
 
         self._workdir = workflow.workdir or self.config.workdir
         self._init_log(self._workdir)
-        self._init_script = workflow.init_script or self.config.init_script
+        raw_init = workflow.init_script or self.config.init_script
+        if raw_init:
+            p = Path(raw_init)
+            if not p.is_absolute() and (Path.cwd() / p).is_file():
+                self._init_script = str((Path.cwd() / raw_init).resolve())
+            else:
+                self._init_script = raw_init
+        else:
+            self._init_script = None
         if "max_loops" not in data:
             workflow.max_loops = self.config.default_max_loops
         self._opencode_opts = self.config.opencode_defaults.merge(
@@ -342,5 +350,5 @@ class ExecutionEngine:
             return False
 
     def log(self, message: str) -> None:
-        self.logger(f"[OpenLoop] {message}")
+        self.logger(message)
         self._write_log(f"[OpenLoop] {message}\n")
