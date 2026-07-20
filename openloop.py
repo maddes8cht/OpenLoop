@@ -46,6 +46,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="JSON string overriding opencode defaults for all agents "
              "(e.g., '{\"model\":\"gpt-4o\",\"agent\":\"plan\"}')",
     )
+    parser.add_argument(
+        "--fullscreen",
+        action="store_true",
+        help="Start GUI maximized",
+    )
+    parser.add_argument(
+        "--layout",
+        choices=["default", "preview", "output"],
+        default="default",
+        help="GUI layout preset (default: %(default)s)",
+    )
     return parser.parse_args(argv)
 
 
@@ -128,6 +139,8 @@ def _run_gui(args: argparse.Namespace, config) -> None:
         workdir=args.workdir,
         init_script=args.init_script,
         opencode_defaults_raw=args.opencode_defaults,
+        fullscreen=args.fullscreen,
+        layout=args.layout,
     )
     try:
         app.run()

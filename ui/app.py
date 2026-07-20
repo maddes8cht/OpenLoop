@@ -157,6 +157,8 @@ class WorkflowApp:
         workdir: Optional[str] = None,
         init_script: Optional[str] = None,
         opencode_defaults_raw: Optional[str] = None,
+        fullscreen: bool = False,
+        layout: str = "default",
     ) -> None:
         self._root = Tk()
         self._root.title("OpenLoop — Workflow Builder")
@@ -175,6 +177,7 @@ class WorkflowApp:
 
         self._build_ui()
         self._root.after_idle(self._init_preview_collapsed)
+        self._root.after_idle(lambda l=layout, fs=fullscreen: self._apply_layout(l, fs))
         self._load_config()
         self._refresh_agent_list()
         self._poll_log_queue()
@@ -444,14 +447,14 @@ class WorkflowApp:
         preview.grid(row=0, column=2, sticky=(N, S, W, E), padx=(2, 0))
         self._preview_collapsible = preview
 
-        notebook = ttk.Notebook(preview.body)
-        notebook.pack(fill="both", expand=True)
+        self._output_notebook = ttk.Notebook(preview.body)
+        self._output_notebook.pack(fill="both", expand=True)
 
         # Tab 1: Agent Preview
-        preview_tab = Frame(notebook)
+        preview_tab = Frame(self._output_notebook)
         preview_tab.columnconfigure(0, weight=1)
         preview_tab.rowconfigure(0, weight=1)
-        notebook.add(preview_tab, text="Agent Preview")
+        self._output_notebook.add(preview_tab, text="Agent Preview")
 
         self._preview_text = Text(
             preview_tab, wrap="word", state="disabled"
@@ -468,10 +471,10 @@ class WorkflowApp:
         self._preview_text.configure(state="disabled")
 
         # Tab 2: Live Output (placeholder for #26)
-        output_tab = Frame(notebook)
+        output_tab = Frame(self._output_notebook)
         output_tab.columnconfigure(0, weight=1)
         output_tab.rowconfigure(0, weight=1)
-        notebook.add(output_tab, text="Live Output")
+        self._output_notebook.add(output_tab, text="Live Output")
 
         self._output_text = Text(
             output_tab, wrap="word", state="disabled"
@@ -930,6 +933,16 @@ class WorkflowApp:
     def _init_preview_collapsed(self) -> None:
         if not self._preview_collapsible.is_collapsed:
             self._preview_collapsible._toggle()
+
+    def _apply_layout(self, layout: str, fullscreen: bool) -> None:
+        if layout in ("preview", "output"):
+            self._root.geometry("1280x720")
+            if self._preview_collapsible.is_collapsed:
+                self._preview_collapsible._expand()
+            if layout == "output":
+                self._output_notebook.select(1)
+        if fullscreen:
+            self._root.state("zoomed")
 
     def _save_log_ratio(self) -> None:
         total = self._root_paned.winfo_height()
