@@ -88,11 +88,14 @@ class OpenCodeRunner:
         timeout: Optional[int] = None,
         cwd: Optional[str] = None,
         init_script: Optional[str] = None,
+        continue_session: bool = False,
     ) -> RunResult:
         effective_timeout = timeout if timeout is not None else self.timeout
         if effective_timeout == 0:
             effective_timeout = None
         cmd = [self.binary, "run"]
+        if continue_session:
+            cmd += ["-c"]
         if opts:
             cmd += opts.to_cli_args()
         cmd.append(prompt)
