@@ -23,12 +23,12 @@ You are AMALA, a meticulous test author...
 |---|---|---|---|
 | `name` | Yes | — | Agent identifier used in workflow slots |
 | `role` | No | `""` | Short role description (e.g. `author`, `auditor`) |
-| `expected_output_format` | No | `json_block` | Hint for expected output format (`json_block` or `xml_tag`) |
+| `expected_output_format` | No | `json_block` | Hint for expected output format (`json_block`, `xml_tag`, or `state_file`) |
 
 ## System Prompt
 
 Everything after the closing `---` frontmatter delimiter becomes the **system prompt**.  
-The engine appends the current `WorkflowState` as a JSON block and instructions to output a `<state_update>` XML tag.
+The engine appends the current `WorkflowState` as a JSON block and instructions to write state to `.openloop/state_update.json`.
 
 ---
 
@@ -74,11 +74,9 @@ OpenLoop maintains a shared `WorkflowState` that is **injected into every agent'
 
 ## How to Update State
 
-Agents communicate state changes by including a JSON update in their output:
+Agents communicate state changes by writing a JSON file to `.openloop/state_update.json`:
 
-**XML tag (preferred):**
-```xml
-<state_update>
+```json
 {
   "is_complete": false,
   "payload": {
@@ -86,37 +84,27 @@ Agents communicate state changes by including a JSON update in their output:
     "coverage": 78.5
   }
 }
-</state_update>
 ```
 
-**JSON code block (fallback):**
-```json
-{
-  "is_complete": true,
-  "payload": {
-    "result": "all_tests_pass"
-  }
-}
-```
+The engine creates the `.openloop/` directory before each agent run and reads the file after. If the file is missing or contains invalid JSON, the engine makes up to **2 correction attempts** (re-running the agent with `-c`). As a last resort, it falls back to parsing `<state_update>` XML tags from stdout.
 
 ### Top-level keys vs. payload
 
 The engine recognizes exactly **five** top-level keys in a state update:
 
-| Top-level key | Allowed in `<state_update>`? | Behavior |
-|---|---|---|
-| `current_phase` | Yes (but not recommended) | Stored but engine may overwrite |
-| `iteration` | Yes (but not recommended) | Stored but engine may overwrite |
-| `is_complete` | Yes | ✓ Correct use |
-| `termination_reason` | Yes | ✓ Correct use |
-| `payload` | Yes | ✓ **The intended container for all custom data** |
-| **Any other key** | Technically parsed, but **silently dropped** | ❌ Wrong use |
+| Top-level key | Behavior |
+|---|---|
+| `current_phase` | Stored but engine may overwrite |
+| `iteration` | Stored but engine may overwrite |
+| `is_complete` | ✓ Correct use |
+| `termination_reason` | ✓ Correct use |
+| `payload` | ✓ **The intended container for all custom data** |
+| **Any other key** | ❌ Dropped with warning |
 
 **Rule of thumb:** Everything specific to your agent workflow goes inside `payload`. Only `is_complete` and `termination_reason` belong at the top level.
 
-```xml
-<!-- GOOD: Custom data inside payload -->
-<state_update>
+```json
+// GOOD: Custom data inside payload
 {
   "is_complete": true,
   "payload": {
@@ -124,19 +112,16 @@ The engine recognizes exactly **five** top-level keys in a state update:
     "bugs_found": 0
   }
 }
-</state_update>
 
-<!-- BAD: Custom data at top level will be dropped -->
-<state_update>
+// BAD: Custom data at top level will be dropped
 {
   "is_complete": true,
   "tests_written": 12,
   "bugs_found": 0
 }
-</state_update>
 ```
 
-If you include an unknown top-level key in your `<state_update>`, the engine will log a warning like:
+If you include an unknown top-level key, the engine will log a warning like:
 ```
 WARNING: Unknown top-level key(s) in state update from 'amala': ['phase']. These will be ignored. Put custom data inside 'payload' instead.
 ```
@@ -160,15 +145,14 @@ The injected state JSON appears under a `# Current State` heading. Refer to it c
 
 ### 2. Tell the agent how to write state
 
-Always include an example `<state_update>` block in your agent file. This serves as a template the LLM can follow.
+Always include a `.openloop/state_update.json` example in your agent file. This serves as a template the LLM can follow.
 
 ```markdown
 ## State Update
 
-At the end of your response, output a `<state_update>` XML tag:
+At the end of your work, write the current state to `.openloop/state_update.json`:
 
-```xml
-<state_update>
+```json
 {
   "is_complete": false,
   "payload": {
@@ -176,7 +160,6 @@ At the end of your response, output a `<state_update>` XML tag:
     "tests_written": 12
   }
 }
-</state_update>
 ```
 ```
 
@@ -199,11 +182,11 @@ Agents in a workflow agree on which `payload` keys they read and write. Document
 
 ### 5. Complete agent example
 
-```markdown
+ ```markdown
 ---
 name: my_agent
 role: custom_role
-expected_output_format: xml_tag
+expected_output_format: state_file
 ---
 
 # Role: MY_AGENT
@@ -218,12 +201,13 @@ You are MY_AGENT, responsible for [describe purpose].
 
 2. Perform [your task].
 
-3. Output a `<state_update>` with your results.
+3. Write the updated state to `.openloop/state_update.json`.
 
 ## State Update
 
-```xml
-<state_update>
+Write the current state to `.openloop/state_update.json`:
+
+```json
 {
   "is_complete": false,
   "payload": {
@@ -231,7 +215,6 @@ You are MY_AGENT, responsible for [describe purpose].
     "items_processed": 42
   }
 }
-</state_update>
 ```
 
 ## Critical Rules

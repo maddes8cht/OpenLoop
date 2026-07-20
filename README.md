@@ -37,7 +37,7 @@ Agents are defined as simple Markdown files with YAML frontmatter. This keeps th
 ---
 name: vera
 role: auditor
-expected_output_format: xml_tag
+expected_output_format: state_file
 ---
 
 # Role
@@ -49,22 +49,23 @@ The orchestrator will inject the current state below.
 # Instructions
 1. Review the code and test coverage.
 2. Update the state based on your findings.
-3. You MUST output your state update inside a `<state_update>` XML tag at the very end of your response.
+3. Write the current state to `.openloop/state_update.json` at the end of your work.
 
-Example:
-<state_update>
+Example (`.openloop/state_update.json`):
+```json
 {
-  "next_phase": "amala_fix",
-  "feedback": "Missing edge case in auth.py line 42",
-  "is_complete": false
+  "is_complete": false,
+  "payload": {
+    "feedback": "Missing edge case in auth.py line 42"
+  }
 }
-</state_update>
+```
 ```
 
 ### 2. Externalized State Management
 The orchestrator holds the "Single Source of Truth" in a Python `dataclass`. 
 - **Injection:** Before an agent runs, the current state is serialized to JSON and injected into the `opencode run` prompt.
-- **Extraction:** After OpenCode finishes, OpenLoop parses the stdout for a structured state update (e.g., inside `<state_update>` tags).
+- **Extraction:** The engine reads `.openloop/state_update.json` written by the agent. If missing or invalid, it falls back to parsing `<state_update>` XML tags from stdout.
 - **Transition:** The orchestrator merges the update into the master state and evaluates the termination conditions.
 
 ### 3. Execution Flow
@@ -107,7 +108,7 @@ Every agent invocation follows the same six-step cycle:
 1. **Serialize** — The engine serializes the current `WorkflowState` to a JSON string via `state.to_json()`.
 2. **Inject** — The JSON is appended to the agent's system prompt under a `# Current State` heading (see `_build_prompt()` in `core/engine.py`).
 3. **Execute** — The full prompt is sent to `opencode run`, which spawns a headless LLM subprocess in a fresh, isolated context.
-4. **Parse** — After the subprocess returns, `StateParser.extract_state_update()` (in `core/parser.py`) scans stdout for a `<state_update>` XML tag (preferred) or a JSON code block (fallback).
+4. **Read** — The engine first reads `.openloop/state_update.json` (written by the agent). If the file is missing or invalid, it makes up to 2 correction attempts via `-c`, then falls back to `StateParser.extract_state_update()` which scans stdout for `<state_update>` XML tags or JSON code blocks.
 5. **Merge** — The parsed key-value pairs are merged into the shared `WorkflowState` via `state.merge()`. Only keys present in the update are changed; the `payload` dict is merged deeply.
 6. **Evaluate** — The `end_state_condition` is evaluated. If true, the loop terminates. Otherwise, the next agent in the sequence starts at step 1 with the updated state.
 

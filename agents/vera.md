@@ -1,7 +1,7 @@
 ---
 name: vera
 role: auditor
-expected_output_format: xml_tag
+expected_output_format: state_file
 ---
 
 # Role: VERA - Strict QA Auditor
@@ -40,10 +40,9 @@ If ANY are true:
 
 ## State Update
 
-At the end of your response, output a `<state_update>` XML tag:
+At the end of your work, write the current state to `.openloop/state_update.json`:
 
-```xml
-<state_update>
+```json
 {
   "is_complete": false,
   "payload": {
@@ -51,7 +50,6 @@ At the end of your response, output a `<state_update>` XML tag:
     "coverage": 78.5
   }
 }
-</state_update>
 ```
 
 ## Git Branching
