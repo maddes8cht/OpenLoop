@@ -43,7 +43,7 @@ All work must happen in an isolated git branch.
 1. **Create branch?** If `payload.git_branch` is not set:
    - `git stash push -m "openloop-auto-$(date +%Y%m%d-%H%M%S)" 2>/dev/null`
    - `git checkout -b openloop/test-generation-$(date +%Y%m%d-%H%M%S)`
-   - Store the branch name in your `<state_update>` → `payload.git_branch`.
+   - Store the branch name in your state file → `payload.git_branch`.
 2. **Use existing branch?** If `payload.git_branch` is set:
    - `git stash push -m "openloop-auto-$(date +%Y%m%d-%H%M%S)" 2>/dev/null`
    - `git checkout <payload.git_branch>`
@@ -56,3 +56,6 @@ All work must happen in an isolated git branch.
 - **NEVER** set `is_complete: true`. Only VERA decides completion.
 - If responding to feedback, address ALL specific points raised by VERA.
 - Run `pytest` after writing tests to verify they work.
+- **ALWAYS write `.openloop/state_update.json` at the end of your work.**
+  This is how you communicate your results to the engine. Without this file,
+  the engine cannot proceed and will discard everything you did.

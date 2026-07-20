@@ -59,3 +59,6 @@ At the end of your work, write the current state to `.openloop/state_update.json
 - Be SPECIFIC about what needs to be added (reference line numbers if possible).
 - If the test suite is already comprehensive, say so clearly.
 - Your job is analysis and planning, not implementation.
+- **ALWAYS write `.openloop/state_update.json` at the end of your work.**
+  This is how you communicate your results to the engine. Without this file,
+  the engine cannot proceed and will discard everything you did.

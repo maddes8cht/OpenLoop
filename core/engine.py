@@ -338,9 +338,11 @@ class ExecutionEngine:
     def _execute_agent(self, agent_name: str) -> None:
         agent = self.agent_loader.get_agent(agent_name)
         self._ensure_state_dir()
+        self._delete_state_file()
         self._write_banner(agent_name)
 
-        prompt = self._build_prompt(agent)
+        base_prompt = self._build_prompt(agent)
+        prompt = base_prompt
         state_data = None
 
         for attempt in range(1 + self.MAX_CORRECTIONS):
@@ -374,6 +376,7 @@ class ExecutionEngine:
                 prompt = self._build_correction_prompt(
                     "state_update.json was not found or was not valid JSON",
                     agent_name,
+                    base_prompt,
                 )
             else:
                 self.log("  Max corrections reached — falling back to stdout parsing")
@@ -404,14 +407,53 @@ class ExecutionEngine:
             f"```json\n"
             f"{state_json}\n"
             f"```\n\n"
-            f"Execute your role based on the instructions above. "
-            f"After completing your task, write the current state to "
-            f"`.openloop/state_update.json` as valid JSON with this structure:\n"
-            f"- is_complete (bool)\n"
-            f"- termination_reason (str)\n"
-            f"- payload (dict) — all custom data goes here\n"
-            f"You may ALSO include a <state_update> XML tag in your response "
-            f"as a secondary method."
+            f"## Critical: You MUST write a state file\n\n"
+            f"After completing your task, write the updated state to "
+            f"`.openloop/state_update.json` as valid JSON. "
+            f"This is how the engine learns what you accomplished.\n\n"
+            f"Valid top-level keys:\n"
+            f"- is_complete (bool) — set to true when the workflow should end\n"
+            f"- termination_reason (str) — optional reason for termination\n"
+            f"- payload (dict) — all custom data goes here\n\n"
+            f"Example:\n"
+            f"```json\n"
+            f"{{\n"
+            f'  "is_complete": false,\n'
+            f'  "payload": {{\n'
+            f'    "result": "completed task"\n'
+            f"  }}\n"
+            f"}}\n"
+            f"```\n"
+        )
+
+    def _build_correction_prompt(
+        self, error: str, agent_name: str, base_prompt: str
+    ) -> str:
+        return (
+            f"{base_prompt}\n\n"
+            f"## CRITICAL: State file was missing\n\n"
+            f"The engine could not find or parse `.openloop/state_update.json` "
+            f"after your run.\n"
+            f"Error: {error}\n\n"
+            f"### Your ONLY remaining task\n\n"
+            f"Write the current workflow state to `.openloop/state_update.json` "
+            f"as valid JSON. The engine does NOT need any other output from you — "
+            f"just the file.\n\n"
+            f"The state BEFORE your run was:\n"
+            f"```json\n"
+            f"{self.state.to_json()}\n"
+            f"```\n\n"
+            f"Update is_complete, termination_reason, and/or payload based on "
+            f"what you accomplished.\n\n"
+            f"Example:\n"
+            f"```json\n"
+            f"{{\n"
+            f'  "is_complete": false,\n'
+            f'  "payload": {{\n'
+            f'    "result": "completed task"\n'
+            f"  }}\n"
+            f"}}\n"
+            f"```\n"
         )
 
     def _evaluate_end_condition(self, condition: str) -> bool:

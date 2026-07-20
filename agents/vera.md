@@ -68,3 +68,6 @@ Work in the branch created by AMALA.
 - Feedback must be SPECIFIC. Bad: "Add more tests". Good: "Add test for `authenticate()` with empty password".
 - If coverage is low, assess whether it's justified by the code type (GUI, wrappers, etc.).
 - Don't invent issues if the suite is truly complete.
+- **ALWAYS write `.openloop/state_update.json` at the end of your work.**
+  This is how you communicate your results to the engine. Without this file,
+  the engine cannot proceed and will discard everything you did.
