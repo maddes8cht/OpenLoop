@@ -121,14 +121,10 @@ class CollapsibleFrame(ttk.Frame):
             self._toggle_canvas.bind(
                 "<Button-1>", lambda e: self._toggle()
             )
-        self._toggle_canvas.pack(fill="both", expand=True, side=LEFT)
-        # centre title vertically after layout
-        self._toggle_canvas.update_idletasks()
-        h = self._toggle_canvas.winfo_height()
-        if h > 30:
-            self._toggle_canvas.coords(
-                self._title_canvas_id, self._CANVAS_W // 2, h // 2
+            self._toggle_canvas.bind(
+                "<Configure>", self._on_canvas_configure
             )
+        self._toggle_canvas.pack(fill="both", expand=True, side=LEFT)
         self._collapsed = True
         self._parent.columnconfigure(
             self._col, weight=self._collapse_weight
@@ -143,6 +139,14 @@ class CollapsibleFrame(ttk.Frame):
         self._parent.columnconfigure(
             self._col, weight=self._expand_weight
         )
+
+    def _on_canvas_configure(self, event) -> None:
+        if self._collapsed and self._title_canvas_id:
+            self._toggle_canvas.coords(
+                self._title_canvas_id,
+                self._CANVAS_W // 2,
+                event.height // 2,
+            )
 
 
 class WorkflowApp:
@@ -170,7 +174,6 @@ class WorkflowApp:
         self._opencode_defaults_raw = opencode_defaults_raw
 
         self._build_ui()
-        self._root.after_idle(self._init_log_collapsed)
         self._root.after_idle(self._init_preview_collapsed)
         self._load_config()
         self._refresh_agent_list()
@@ -229,9 +232,9 @@ class WorkflowApp:
         )
         self._stop_btn.pack(side=LEFT, padx=2)
 
-        self._log_collapsed = BooleanVar(value=True)
+        self._log_collapsed = BooleanVar(value=False)
         self._log_toggle_btn = Button(
-            toolbar, text="Log ▼", width=6, command=self._toggle_log
+            toolbar, text="Log ▲", width=6, command=self._toggle_log
         )
         self._log_toggle_btn.pack(side=LEFT, padx=2)
 
