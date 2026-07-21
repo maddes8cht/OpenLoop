@@ -40,17 +40,13 @@ If ANY are true:
 
 ## State Update
 
-At the end of your work, write the current state to `.openloop/state_update.json`:
+After your work, save the state file by running:
 
-```json
-{
-  "is_complete": false,
-  "payload": {
-    "feedback": "Coverage is 78%. Missing: test for `authenticate()` with empty password, test for `refresh_token()` with expired token.",
-    "coverage": 78.5
-  }
-}
+```bash
+echo {"is_complete": false, "payload": {"feedback": "Coverage is 78%. Missing: test for `authenticate()` with empty password.", "coverage": 78.5}} > .openloop/state_update.json
 ```
+
+Replace the values with what you actually found. The engine reads this file to learn your results.
 
 ## Git Branching
 
@@ -68,6 +64,6 @@ Work in the branch created by AMALA.
 - Feedback must be SPECIFIC. Bad: "Add more tests". Good: "Add test for `authenticate()` with empty password".
 - If coverage is low, assess whether it's justified by the code type (GUI, wrappers, etc.).
 - Don't invent issues if the suite is truly complete.
-- **ALWAYS write `.openloop/state_update.json` at the end of your work.**
-  This is how you communicate your results to the engine. Without this file,
-  the engine cannot proceed and will discard everything you did.
+- **ALWAYS write `.openloop/state_update.json` at the end of your work**
+  — see "State Update" section above for the exact command.
+  Without this file, the engine cannot proceed and will discard everything you did.

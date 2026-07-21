@@ -182,7 +182,9 @@ class ExecutionEngine:
 
     def _read_state_file(self) -> Optional[dict]:
         path = self._state_file_path()
+        self.log(f"  Checking state file: {path}")
         if not path.exists():
+            self.log(f"  State file NOT FOUND at {path}")
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -409,21 +411,16 @@ class ExecutionEngine:
             f"```\n\n"
             f"## Critical: You MUST write a state file\n\n"
             f"After completing your task, write the updated state to "
-            f"`.openloop/state_update.json` as valid JSON. "
-            f"This is how the engine learns what you accomplished.\n\n"
-            f"Valid top-level keys:\n"
-            f"- is_complete (bool) — set to true when the workflow should end\n"
-            f"- termination_reason (str) — optional reason for termination\n"
-            f"- payload (dict) — all custom data goes here\n\n"
-            f"Example:\n"
-            f"```json\n"
-            f"{{\n"
-            f'  "is_complete": false,\n'
-            f'  "payload": {{\n'
-            f'    "result": "completed task"\n'
-            f"  }}\n"
-            f"}}\n"
-            f"```\n"
+            f"`.openloop/state_update.json` by running this command:\n\n"
+            f"```bash\n"
+            f'echo {{"is_complete": false, "payload": {{"result": "describe what you did"}}}} > .openloop/state_update.json\n'
+            f"```\n\n"
+            f"Replace the values with what you accomplished. "
+            f"This is the ONLY way the engine learns your results.\n\n"
+            f"Valid keys:\n"
+            f"- is_complete (bool) — true when the workflow should end\n"
+            f"- termination_reason (str) — optional reason\n"
+            f"- payload (dict) — all custom data goes here\n"
         )
 
     def _build_correction_prompt(
@@ -433,27 +430,19 @@ class ExecutionEngine:
             f"{base_prompt}\n\n"
             f"## CRITICAL: State file was missing\n\n"
             f"The engine could not find or parse `.openloop/state_update.json` "
-            f"after your run.\n"
+            f"after your previous run.\n"
             f"Error: {error}\n\n"
             f"### Your ONLY remaining task\n\n"
-            f"Write the current workflow state to `.openloop/state_update.json` "
-            f"as valid JSON. The engine does NOT need any other output from you — "
-            f"just the file.\n\n"
+            f"Run this bash command NOW. Do NOT do any other work:\n\n"
+            f"```bash\n"
+            f'echo {{"is_complete": false, "payload": {{"result": "describe what you did"}}}} > .openloop/state_update.json\n'
+            f"```\n\n"
             f"The state BEFORE your run was:\n"
             f"```json\n"
             f"{self.state.to_json()}\n"
             f"```\n\n"
-            f"Update is_complete, termination_reason, and/or payload based on "
-            f"what you accomplished.\n\n"
-            f"Example:\n"
-            f"```json\n"
-            f"{{\n"
-            f'  "is_complete": false,\n'
-            f'  "payload": {{\n'
-            f'    "result": "completed task"\n'
-            f"  }}\n"
-            f"}}\n"
-            f"```\n"
+            f"Update the values in the echo command based on what you accomplished. "
+            f"The engine does NOT need any other output — just the file.\n"
         )
 
     def _evaluate_end_condition(self, condition: str) -> bool:
