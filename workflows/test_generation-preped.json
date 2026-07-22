@@ -4,11 +4,11 @@
   // to Amala (code analysis) and Vera (test generation/improvement).
   // workdir and init_script are examples — adjust for your repo.
   "preparation_agents": [
-    "Proteus"
+    "proteus"
   ],
   "loop_agents": [
-    "Amala",
-    "Vera"
+    "amala",
+    "vera"
   ],
   "finalization_agents": [],
   "max_loops": 10,

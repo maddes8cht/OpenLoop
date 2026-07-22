@@ -1,7 +1,8 @@
 import json
 import threading
+import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -44,6 +45,7 @@ class WorkflowConfig:
         prep = data.get("preparation_agents")
         if prep is None:
             prep = data.get("preparation_agent")
+
         if isinstance(prep, str):
             prep = [prep]
         elif not isinstance(prep, list):
@@ -52,6 +54,7 @@ class WorkflowConfig:
         final = data.get("finalization_agents")
         if final is None:
             final = data.get("finalization_agent")
+
         if isinstance(final, str):
             final = [final]
         elif not isinstance(final, list):
@@ -88,9 +91,11 @@ class WorkflowConfig:
             "workdir": self.workdir,
             "init_script": self.init_script,
         }
+
         opts_dict = self.opencode_defaults.to_dict()
         if opts_dict:
             d["opencode_defaults"] = opts_dict
+
         return d
 
 
@@ -98,7 +103,6 @@ LogCallback = Callable[[str], None]
 
 
 class ExecutionEngine:
-    STATE_FILE = ".openloop/state_update.json"
     MAX_CORRECTIONS = 2
 
     def __init__(
@@ -114,32 +118,43 @@ class ExecutionEngine:
         self.logger = logger or (lambda msg: print(f"[OpenLoop] {msg}"))
         self.state = WorkflowState()
         self.agent_loader = AgentLoader(self.config.agents_dir)
+
         self._timeout = timeout if timeout is not None else self.config.default_timeout
         self.runner = OpenCodeRunner(
             binary=self.config.opencode_binary,
             timeout=self._timeout,
         )
+
         self._stop_event = stop_event or threading.Event()
+
         self._log_handle = None
         self._log_path: Optional[Path] = None
         self._no_log_file = no_log_file
         self._log_file_arg = log_file
+
+        self._workdir: Optional[str] = None
+        self._init_script: Optional[str] = None
+        self._opencode_opts = OpenCodeOptions()
 
     # ---- File logging ----
 
     def _init_log(self, workdir: Optional[str] = None) -> None:
         if self._no_log_file:
             return
+
         if self._log_file_arg:
             self._log_path = Path(self._log_file_arg)
         else:
             log_dir = Path(self.config.log_dir)
             if not log_dir.is_absolute() and workdir:
                 log_dir = Path(workdir) / log_dir
+
             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
             self._log_path = log_dir / f"openloop-run-{ts}.log"
+
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log_handle = self._log_path.open("w", encoding="utf-8")
+
         self._write_log(
             f"OpenLoop run started at "
             f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
@@ -160,82 +175,67 @@ class ExecutionEngine:
             self._log_handle.flush()
 
     def _write_banner(self, agent_name: str) -> None:
+        run_id = self._get_run_id()
+
         self._write_log(
-            f"{'='*70}\n"
+            f"{'=' * 70}\n"
             f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
             f"Agent: {agent_name} | Phase: {self.state.current_phase} | "
-            f"Iteration: {self.state.iteration}\n"
-            f"{'='*70}\n\n"
+            f"Iteration: {self.state.iteration} | Run ID: {run_id}\n"
+            f"{'=' * 70}\n\n"
         )
 
-    # ---- State file helpers ----
+    # ---- Run metadata ----
 
-    @property
-    def _effective_workdir(self) -> str:
-        return self._workdir or str(Path.cwd())
+    def _init_run_meta(self) -> None:
+        now = datetime.now(timezone.utc)
 
-    def _ensure_state_dir(self) -> None:
-        Path(self._effective_workdir, ".openloop").mkdir(parents=True, exist_ok=True)
-
-    def _state_file_path(self) -> Path:
-        return Path(self._effective_workdir) / self.STATE_FILE
-
-    def _read_state_file(self) -> Optional[dict]:
-        path = self._state_file_path()
-        self.log(f"  Checking state file: {path}")
-        if not path.exists():
-            self.log(f"  State file NOT FOUND at {path}")
-            return None
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return None
-        if not isinstance(data, dict):
-            return None
-        return data
-
-    def _delete_state_file(self) -> None:
-        path = self._state_file_path()
-        if path.exists():
-            try:
-                path.unlink()
-            except OSError:
-                pass
-
-    def _build_correction_prompt(self, error: str, agent_name: str) -> str:
-        return (
-            f"The engine could not find or parse the state file at "
-            f"`.openloop/state_update.json`.\n"
-            f"Error: {error}\n\n"
-            f"Please write the updated state to `.openloop/state_update.json` "
-            f"as valid JSON. The JSON object may contain:\n"
-            f"- is_complete (bool)\n"
-            f"- termination_reason (str)\n"
-            f"- payload (dict) — for all workflow-specific data\n\n"
-            f"Example:\n"
-            f"```json\n"
-            f"{{\n"
-            f'  "is_complete": false,\n'
-            f'  "payload": {{\n'
-            f'    "result": "completed task"\n'
-            f"  }}\n"
-            f"}}\n"
-            f"```\n"
+        run_id = (
+            f"{now.strftime('%Y%m%d-%H%M%SZ')}"
+            f"-{uuid.uuid4().hex[:6]}"
         )
 
-    def execute_workflow(
-        self, workflow_path: str | Path
-    ) -> WorkflowState:
+        meta = {
+            "run_id": run_id,
+            "started_at": now.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        }
+
+        # Preferred: dedicated top-level meta block, if state.py supports it.
+        if hasattr(self.state, "meta"):
+            self.state.meta = meta
+        else:
+            # Fallback for older state definitions without explicit meta field.
+            self.state.payload.setdefault("_openloop", {}).update(meta)
+
+    def _get_run_id(self) -> str:
+        meta = getattr(self.state, "meta", None)
+        if isinstance(meta, dict):
+            return str(meta.get("run_id", ""))
+
+        openloop_meta = self.state.payload.get("_openloop")
+        if isinstance(openloop_meta, dict):
+            return str(openloop_meta.get("run_id", ""))
+
+        return ""
+
+    # ---- Workflow execution ----
+
+    def execute_workflow(self, workflow_path: str | Path) -> WorkflowState:
         workflow = WorkflowConfig.load(workflow_path)
         return self.execute_workflow_data(workflow.to_dict())
 
     def execute_workflow_data(self, data: dict) -> WorkflowState:
         workflow = WorkflowConfig.from_dict(data)
+
         self.state = WorkflowState()
-        self.log(f"Loaded workflow: {workflow.loop_agents}")
+        self._init_run_meta()
 
         self._workdir = workflow.workdir or self.config.workdir
         self._init_log(self._workdir)
+
+        self.log(f"Loaded workflow: {workflow.loop_agents}")
+        self.log(f"Run ID: {self._get_run_id()}")
+
         raw_init = workflow.init_script or self.config.init_script
         if raw_init:
             p = Path(raw_init)
@@ -245,19 +245,31 @@ class ExecutionEngine:
                 self._init_script = raw_init
         else:
             self._init_script = None
+
         if "max_loops" not in data:
             workflow.max_loops = self.config.default_max_loops
+
         self._opencode_opts = self.config.opencode_defaults.merge(
             workflow.opencode_defaults
         )
 
         try:
             self._run_preparation(workflow)
-            if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+
+            if (
+                self.state.termination_reason
+                and self.state.termination_reason.startswith("agent_error:")
+            ):
                 return self.state
+
             self._run_loop(workflow)
-            if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+
+            if (
+                self.state.termination_reason
+                and self.state.termination_reason.startswith("agent_error:")
+            ):
                 return self.state
+
             self._run_finalization(workflow)
 
             return self.state
@@ -270,10 +282,15 @@ class ExecutionEngine:
             return
 
         self.state.current_phase = "preparation"
+
         for agent_name in workflow.preparation_agents:
             self.log(f"Preparation phase: {agent_name}")
             self._execute_agent(agent_name)
-            if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+
+            if (
+                self.state.termination_reason
+                and self.state.termination_reason.startswith("agent_error:")
+            ):
                 return
 
     def _run_loop(self, workflow: WorkflowConfig) -> None:
@@ -283,8 +300,13 @@ class ExecutionEngine:
             return
 
         self.state.current_phase = "loop"
-        if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+
+        if (
+            self.state.termination_reason
+            and self.state.termination_reason.startswith("agent_error:")
+        ):
             return
+
         while self.state.iteration < workflow.max_loops:
             if self._stop_event.is_set():
                 self.state.termination_reason = "stopped"
@@ -300,20 +322,24 @@ class ExecutionEngine:
                 self.log(f"  Running agent: {agent_name}")
                 self._execute_agent(agent_name)
 
-                if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+                if (
+                    self.state.termination_reason
+                    and self.state.termination_reason.startswith("agent_error:")
+                ):
                     return
 
-                if self._evaluate_end_condition(
-                    workflow.end_state_condition
-                ):
+                if self._evaluate_end_condition(workflow.end_state_condition):
                     self.log(
-                        f"  Termination condition met (iteration {self.state.iteration})"
+                        f"  Termination condition met "
+                        f"(iteration {self.state.iteration})"
                     )
                     self.state.termination_reason = "completed"
                     return
 
         self.state.termination_reason = "max_loops_reached"
-        self.log(f"Max loops ({workflow.max_loops}) reached — terminating loop")
+        self.log(
+            f"Max loops ({workflow.max_loops}) reached — terminating loop"
+        )
 
     def _run_finalization(self, workflow: WorkflowConfig) -> None:
         if not workflow.finalization_agents:
@@ -333,59 +359,80 @@ class ExecutionEngine:
             return
 
         self.state.current_phase = "finalization"
+
         for agent_name in workflow.finalization_agents:
             self.log(f"Finalization phase: {agent_name}")
             self._execute_agent(agent_name)
 
     def _execute_agent(self, agent_name: str) -> None:
         agent = self.agent_loader.get_agent(agent_name)
-        self._ensure_state_dir()
-        self._delete_state_file()
+
         self._write_banner(agent_name)
 
         base_prompt = self._build_prompt(agent)
         prompt = base_prompt
+
         state_data = None
 
         for attempt in range(1 + self.MAX_CORRECTIONS):
             result = self.runner.run(
                 prompt,
-                opts=getattr(self, "_opencode_opts", None),
-                cwd=getattr(self, "_workdir", None),
-                init_script=getattr(self, "_init_script", None),
+                opts=self._opencode_opts,
+                cwd=self._workdir,
+                init_script=self._init_script,
                 continue_session=(attempt > 0),
             )
 
             if result.output:
                 self._write_log(f"[stdout]\n{result.output}\n\n")
+
             if result.error:
                 self._write_log(f"[stderr]\n{result.error}\n\n")
 
             if not result.success:
-                self.log(f"  Agent '{agent_name}' failed (exit {result.exit_code})")
+                self.log(
+                    f"  Agent '{agent_name}' failed "
+                    f"(exit {result.exit_code})"
+                )
                 self.state.termination_reason = f"agent_error:{agent_name}"
                 return
 
-            state_data = self._read_state_file()
+            # State is now extracted exclusively from the agent response.
+            state_data = StateParser.extract_state_update(result.output)
+
             if state_data is not None:
                 break
 
             if attempt < self.MAX_CORRECTIONS:
                 self.log(
-                    f"  State file missing or invalid — "
+                    f"  State update missing or invalid — "
                     f"correction attempt {attempt + 1}/{self.MAX_CORRECTIONS}"
                 )
                 prompt = self._build_correction_prompt(
-                    "state_update.json was not found or was not valid JSON",
+                    "No valid <state_update> block was found in the agent output.",
                     agent_name,
-                    base_prompt,
                 )
             else:
-                self.log("  Max corrections reached — falling back to stdout parsing")
-                state_data = StateParser.extract_state_update(result.output)
+                self.log(
+                    "  Max corrections reached — no valid state update found"
+                )
 
         if state_data is not None:
-            KNOWN_KEYS = {"current_phase", "iteration", "is_complete", "termination_reason", "payload"}
+            if "meta" in state_data:
+                self.log(
+                    "  NOTE: 'meta' is read-only; "
+                    "agent-provided meta was ignored."
+                )
+
+            KNOWN_KEYS = {
+                "current_phase",
+                "iteration",
+                "is_complete",
+                "termination_reason",
+                "payload",
+                "meta",
+            }
+
             unknown = [k for k in state_data if k not in KNOWN_KEYS]
             if unknown:
                 self.log(
@@ -393,68 +440,91 @@ class ExecutionEngine:
                     f"'{agent_name}': {unknown}. "
                     f"These will be ignored. Put custom data inside 'payload' instead."
                 )
+
             self.state.merge(state_data)
-            self._delete_state_file()
             self.log(f"  State updated: {json.dumps(state_data)}")
         else:
             self.log(
-                f"  WARNING: No state update found in output from '{agent_name}'"
+                f"  ERROR: No state update found in output from '{agent_name}'"
             )
+            self.state.termination_reason = f"no_state:{agent_name}"
+            return
 
     def _build_prompt(self, agent: AgentDefinition) -> str:
         state_json = self.state.to_json()
+
         return (
             f"{agent.system_prompt}\n\n"
             f"# Current State\n"
             f"```json\n"
             f"{state_json}\n"
             f"```\n\n"
-            f"## Critical: You MUST write a state file\n\n"
-            f"After completing your task, write the updated state to "
-            f"`.openloop/state_update.json` by running this command:\n\n"
-            f"```bash\n"
-            f'echo {{"is_complete": false, "payload": {{"result": "describe what you did"}}}} > .openloop/state_update.json\n'
-            f"```\n\n"
-            f"Replace the values with what you accomplished. "
-            f"This is the ONLY way the engine learns your results.\n\n"
-            f"Valid keys:\n"
+            f"## State Update (MANDATORY)\n\n"
+            f"At the very end of your final response, output exactly one valid "
+            f"JSON object wrapped in `<state_update>` tags.\n\n"
+            f"Example:\n\n"
+            f"<state_update>\n"
+            f'{{"is_complete": false, "payload": {{"summary": "..."}}}}\n'
+            f"</state_update>\n\n"
+            f"Rules:\n"
+            f"- The JSON must be valid JSON.\n"
+            f"- Do not wrap the JSON inside Markdown code fences within the "
+            f"`<state_update>` tags.\n"
+            f"- Do not ask questions. Do not wait for confirmation.\n"
+            f"- Do not write any state file. The state must be returned in your response.\n"
+            f"- Do not modify the `meta` block. It is read-only.\n"
+            f"- Put all custom data inside `payload`.\n\n"
+            f"Valid top-level keys:\n"
             f"- is_complete (bool) — true when the workflow should end\n"
             f"- termination_reason (str) — optional reason\n"
             f"- payload (dict) — all custom data goes here\n"
         )
 
     def _build_correction_prompt(
-        self, error: str, agent_name: str, base_prompt: str
+        self,
+        error: str,
+        agent_name: str,
+        base_prompt: Optional[str] = None,
     ) -> str:
+        # base_prompt wird bewusst nicht mehr verwendet.
+        # Der Korrekturlauf läuft mit -c im bereits etablierten Kontext.
         return (
-            f"{base_prompt}\n\n"
-            f"## CRITICAL: State file was missing\n\n"
-            f"The engine could not find or parse `.openloop/state_update.json` "
-            f"after your previous run.\n"
+            "SYSTEM NOTICE: Your previous response did not contain a valid state update.\n"
+            f"Agent: {agent_name}\n"
             f"Error: {error}\n\n"
-            f"### Your ONLY remaining task\n\n"
-            f"Run this bash command NOW. Do NOT do any other work:\n\n"
-            f"```bash\n"
-            f'echo {{"is_complete": false, "payload": {{"result": "describe what you did"}}}} > .openloop/state_update.json\n'
-            f"```\n\n"
-            f"The state BEFORE your run was:\n"
-            f"```json\n"
-            f"{self.state.to_json()}\n"
-            f"```\n\n"
-            f"Update the values in the echo command based on what you accomplished. "
-            f"The engine does NOT need any other output — just the file.\n"
+            "Based on the work you have already done, reply now with ONLY one valid JSON object "
+            "wrapped in <state_update> tags.\n\n"
+            "Do not ask questions.\n"
+            "Do not redo your original task.\n"
+            "Do not repeat your analysis.\n"
+            "Do not add explanations outside the tags.\n"
+            "Do not write files.\n"
+            "Do not use Markdown code fences inside the tags.\n"
+            "Do not modify meta.\n"
+            "Keep the completion rules from your original role instructions.\n\n"
+            "The JSON must be strict: no comments, no trailing commas. Use null for unknown values.\n"
+            "Allowed top-level keys: is_complete, termination_reason, payload.\n"
+            "If unsure or blocked, still output a state update with \"is_complete\": false "
+            "and a short explanation in payload.summary.\n\n"
+            "Example:\n"
+            "<state_update>\n"
+            "{\"is_complete\": false, \"payload\": {\"summary\": \"short factual summary\"}}\n"
+            "</state_update>\n"
         )
 
     def _evaluate_end_condition(self, condition: str) -> bool:
         if condition == "is_complete == True":
             return bool(self.state.is_complete)
+
         ns = {
             "is_complete": self.state.is_complete,
             "iteration": self.state.iteration,
             "termination_reason": self.state.termination_reason,
             "phase": self.state.current_phase,
             "payload": self.state.payload,
+            "meta": getattr(self.state, "meta", {}),
         }
+
         try:
             return bool(eval(condition, {"__builtins__": {}}, ns))
         except Exception as exc:
