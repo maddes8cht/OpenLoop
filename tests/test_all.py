@@ -657,7 +657,10 @@ class TestOpenCodeRunner:
             r = OpenCodeRunner(binary="my-opencode")
             r.run("some prompt")
             cmd = mock_run.call_args.kwargs["args"]
-            assert cmd == ["my-opencode", "run", "some prompt"]
+            assert cmd[0:3] == ["my-opencode", "run", "--file"]
+            assert cmd[3].endswith("current_prompt.md")
+            assert cmd[4:6] == ["--dir", "."]
+            assert cmd[6] == "Follow the instructions in the attached file exactly."
 
 
 # ===========================================================================
@@ -974,7 +977,7 @@ class TestExecutionEngine:
             }
         )
         assert state.is_complete is True
-        assert state.termination_reason == ""
+        assert state.termination_reason == "completed"
 
     def test_execute_workflow_completes(self):
         from core.engine import ExecutionEngine
@@ -1325,13 +1328,7 @@ class TestExecutionEngine:
 
         engine.runner = MagicMock()
         engine.runner.run.side_effect = [
-            # Agent "a" — 3 calls (initial + 2 corrections) then fallback to stdout
             type("R", (), {"success": True, "output": '<state_update>{"payload": {"step": 1}}</state_update>', "error": "", "exit_code": 0})(),
-            type("R", (), {"success": True, "output": '<state_update>{"payload": {"step": 1}}</state_update>', "error": "", "exit_code": 0})(),
-            type("R", (), {"success": True, "output": '<state_update>{"payload": {"step": 1}}</state_update>', "error": "", "exit_code": 0})(),
-            # Agent "b" — 3 calls
-            type("R", (), {"success": True, "output": '<state_update>{"is_complete": true, "payload": {"step": 2}}</state_update>', "error": "", "exit_code": 0})(),
-            type("R", (), {"success": True, "output": '<state_update>{"is_complete": true, "payload": {"step": 2}}</state_update>', "error": "", "exit_code": 0})(),
             type("R", (), {"success": True, "output": '<state_update>{"is_complete": true, "payload": {"step": 2}}</state_update>', "error": "", "exit_code": 0})(),
         ]
         engine.agent_loader = self._make_mock_agent_loader({"a": "First", "b": "Second"})
@@ -1365,12 +1362,14 @@ class TestExecutionEngine:
         calls = []
 
         class TrackingRunner:
+            PROMPT_FILENAME = "prompt.md"
+
             def run(self, prompt, opts=None, timeout=None, cwd=None, init_script=None, **kwargs):
                 calls.append(opts)
                 return type("R", (), {"success": True, "output": '<state_update>{"is_complete": true}</state_update>', "error": "", "exit_code": 0})()
 
         engine.runner = TrackingRunner()
-        engine.agent_loader = type("L", (), {"get_agent": lambda self, name: type("A", (), {"name": name, "role": "", "system_prompt": "You are A."})()})()
+        engine.agent_loader = type("L", (), {"get_agent": lambda self, name: type("A", (), {"name": name, "can_complete": True, "role": "auditor", "system_prompt": "You are A."})()})()
 
         engine.config = type("C", (), {
             "opencode_defaults": OpenCodeOptions(model="gpt-4", agent="build"),
@@ -1386,7 +1385,7 @@ class TestExecutionEngine:
             "end_state_condition": "is_complete == True",
         })
 
-        assert len(calls) == 3  # initial + 2 corrections before stdout fallback
+        assert len(calls) == 1  # initial (breaks on first valid state_update)
         passed_opts = calls[0]
         assert passed_opts.model == "gpt-4"
         assert passed_opts.agent == "build"
@@ -1403,12 +1402,14 @@ class TestExecutionEngine:
         calls = []
 
         class TrackingRunner:
+            PROMPT_FILENAME = "prompt.md"
+
             def run(self, prompt, opts=None, timeout=None, cwd=None, init_script=None, **kwargs):
                 calls.append(opts)
                 return type("R", (), {"success": True, "output": '<state_update>{"is_complete": true}</state_update>', "error": "", "exit_code": 0})()
 
         engine.runner = TrackingRunner()
-        engine.agent_loader = type("L", (), {"get_agent": lambda self, name: type("A", (), {"name": name, "role": "", "system_prompt": "You are A."})()})()
+        engine.agent_loader = type("L", (), {"get_agent": lambda self, name: type("A", (), {"name": name, "can_complete": True, "role": "auditor", "system_prompt": "You are A."})()})()
 
         engine.config = type("C", (), {
             "opencode_defaults": OpenCodeOptions(model="gpt-4", agent="build"),
@@ -1425,7 +1426,7 @@ class TestExecutionEngine:
             "opencode_defaults": {"model": "claude"},
         })
 
-        assert len(calls) == 3  # initial + 2 corrections before stdout fallback
+        assert len(calls) == 1  # initial (breaks on first valid state_update)
         passed_opts = calls[0]
         assert passed_opts.model == "claude"
         assert passed_opts.agent == "build"
@@ -1455,7 +1456,7 @@ class TestExecutionEngine:
 
         def get_agent(name):
             prompt = agents.get(name, "You are a default agent.")
-            return type("A", (), {"name": name, "role": "", "system_prompt": prompt})()
+            return type("A", (), {"name": name, "can_complete": True, "role": "auditor", "system_prompt": prompt})()
 
         loader.get_agent.side_effect = get_agent
         return loader

@@ -1,4 +1,3 @@
-import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -77,6 +76,8 @@ class RunResult:
 
 
 class OpenCodeRunner:
+    PROMPT_FILENAME = "current_prompt.md"
+
     def __init__(self, binary: str = "opencode", timeout: int = 600):
         self.binary = binary
         self.timeout = timeout
@@ -89,16 +90,33 @@ class OpenCodeRunner:
         cwd: Optional[str] = None,
         init_script: Optional[str] = None,
         continue_session: bool = False,
+        prompt_file: Optional[Path] = None,
     ) -> RunResult:
         effective_timeout = timeout if timeout is not None else self.timeout
         if effective_timeout == 0:
             effective_timeout = None
+
         cmd = [self.binary, "run"]
+
         if continue_session:
             cmd += ["-c"]
+
         if opts:
             cmd += opts.to_cli_args()
-        cmd.append(prompt)
+
+        if continue_session:
+            cmd += [prompt]
+        else:
+            if prompt_file is None:
+                workdir = Path(cwd) if cwd else Path.cwd()
+                prompt_file = workdir / ".openloop" / self.PROMPT_FILENAME
+
+            prompt_file.parent.mkdir(parents=True, exist_ok=True)
+            prompt_file.write_text(prompt, encoding="utf-8")
+
+            cmd += ["--file", str(prompt_file.resolve())]
+            cmd += ["--dir", str(Path(cwd).resolve()) if cwd else "."]
+            cmd += ["Follow the instructions in the attached file exactly."]
 
         if init_script:
             if Path(init_script).is_file():
@@ -115,6 +133,7 @@ class OpenCodeRunner:
                     prefix = f'"{init_script}"'
             else:
                 prefix = init_script
+
             run_args: dict = dict(
                 args=f"{prefix} && {subprocess.list2cmdline(cmd)}",
                 shell=True,
@@ -125,6 +144,7 @@ class OpenCodeRunner:
         run_args.update(
             capture_output=True, text=True, timeout=effective_timeout
         )
+
         if cwd:
             run_args["cwd"] = cwd
 
