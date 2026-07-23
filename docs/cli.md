@@ -16,6 +16,7 @@ python openloop.py [OPTIONS]
 | `--init-script <cmd>` | Override the init script/command run before each agent invocation. Takes precedence over `openloop.json` and workflow settings. |
 | `--opencode-defaults <json>` | JSON string overriding opencode defaults for all agents (e.g., `'{"model":"gpt-4o","agent":"plan"}'`). Merges with config/workflow settings. |
 | `--config <path>` | Path to configuration file (default: `openloop.json` in CWD, falls back to `openloop.json` next to `openloop.py`) |
+| `--verbose`, `-v` | Stream agent stdout/stderr to terminal during execution |
 | `--help` | Show help message and exit |
 
 ## Exit Codes
@@ -34,6 +35,9 @@ The `opencode` binary must be available in `PATH` (or configured via `opencode_b
 ```bash
 # Run a workflow headless
 python openloop.py --cli --workflow workflows/test_generation.json
+
+# Run with detailed live agent output
+python openloop.py --cli --workflow workflows/test_generation.json --verbose
 
 # Run with custom working directory and init script
 python openloop.py --cli --workflow workflows/test_generation.json ^
