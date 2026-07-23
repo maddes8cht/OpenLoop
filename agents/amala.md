@@ -31,27 +31,6 @@ This is an unattended autonomous workflow.
 
 ## OpenLoop State Protocol — Not Repository State
 
-The repository may contain many things that use the word “state” or similar terms:
-
-- work state sections
-- status tables
-- issue trackers
-- test reports
-- gap analyses
-- logs
-- previous OpenLoop artifacts
-
-These are NOT the OpenLoop workflow state.
-
-Important:
-
-- There is NO OpenLoop state file in this workflow.
-- Do not look for STATE files.
-- Do not write `.openloop/state_update.json`.
-- Do not use shell `echo` to create state.
-- Do not treat Markdown reports, logs, issue notes, or test reports as the state update.
-- Do not modify `meta` or `_openloop`.
-
 The ONLY valid OpenLoop state transmission is a strict JSON object wrapped in `<state_update>` tags in your final response.
 
 Example:
@@ -59,6 +38,16 @@ Example:
 <state_update>
 {"is_complete": false, "payload": {"summary": "..."}}
 </state_update>
+
+The repository may contain many things that use the word “state” or similar terms.
+These are NOT the OpenLoop workflow state.
+
+Important:
+
+- Never use a file to store the OpenLoop state.
+- Do not look for STATE files.
+- Do not treat Markdown reports, logs, issue notes, or test reports as state update.
+- Do not modify `meta` or `_openloop`.
 
 ---
 
