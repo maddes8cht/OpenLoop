@@ -63,6 +63,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Disable file logging",
     )
     parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Stream agent stdout/stderr to terminal during execution",
+    )
+    parser.add_argument(
         "--log-file",
         type=str,
         default=None,
@@ -128,6 +133,7 @@ def _run_cli(args: argparse.Namespace, config) -> None:
 
         engine = ExecutionEngine(
             config=cfg,
+            verbose=args.verbose,
             no_log_file=args.no_log_file,
             log_file=args.log_file,
             timeout=args.timeout,

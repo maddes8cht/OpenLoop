@@ -207,6 +207,7 @@ class ExecutionEngine:
         config: Optional[Config] = None,
         logger: Optional[LogCallback] = None,
         stop_event: Optional[threading.Event] = None,
+        verbose: bool = False,
         no_log_file: bool = False,
         log_file: Optional[str] = None,
         timeout: Optional[int] = None,
@@ -228,6 +229,7 @@ class ExecutionEngine:
         self._log_handle = None
         self._log_path: Optional[Path] = None
         self._log_dir: Optional[Path] = None
+        self._verbose = verbose
         self._no_log_file = no_log_file
         self._log_file_arg = log_file
 
@@ -657,9 +659,13 @@ class ExecutionEngine:
 
             if result.output:
                 self._write_log(f"[stdout]\n{result.output}\n\n")
+                if self._verbose:
+                    print(result.output)
 
             if result.error:
                 self._write_log(f"[stderr]\n{result.error}\n\n")
+                if self._verbose:
+                    print(result.error, file=sys.stderr)
 
             if not result.success:
                 self.log(
