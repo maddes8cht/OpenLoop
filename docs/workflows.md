@@ -31,6 +31,8 @@ Workflow definitions are JSON files stored in `workflows/` (configurable via `wo
 | `init_script` | string / null | `null` | Script/command run before each agent invocation (overrides `openloop.json`) |
 | `opencode_defaults` | object | `{}` | Default flags for `opencode run` (see Configuration docs). Merges with `openloop.json` — workflow values override config values. |
 
+> **Completion authority:** An agent can only set `is_complete=true` if its definition has `can_complete: true` or its role is one of `auditor`, `approver`, `finalizer`, `finalization`. See [Agent Definitions](agent-definitions.md) for details.
+
 ## end_state_condition
 
 A Python expression evaluated in a restricted namespace with these variables:
@@ -42,6 +44,7 @@ A Python expression evaluated in a restricted namespace with these variables:
 | `termination_reason` | str | Current termination reason |
 | `phase` | str | Current phase name |
 | `payload` | dict | Arbitrary state payload set by agents |
+| `meta` | dict | Run metadata (e.g. `{"run_id": "..."}`) — also accessible via `payload._openloop` |
 
 Built-in functions are not available — only the variables above.
 
