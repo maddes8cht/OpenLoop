@@ -2,6 +2,7 @@ import json
 import sys
 import threading
 import uuid
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -141,6 +142,44 @@ LogCallback = Callable[[str], None]
 
 class ExecutionEngine:
     MAX_CORRECTIONS = 2
+
+    CORRECTION_EXAMPLE = (
+        "<state_update>\n"
+        '{"is_complete": false, "payload": {"summary": "Brief factual summary of completed work"}}\n'
+        "</state_update>"
+    )
+
+    CORRECTION_FAILURE_HINTS = {
+        "missing": (
+            "The previous response contained no usable state block. "
+            "Reconstruct the state from the work already done and output it now. "
+            "Do not redo the original task."
+        ),
+        "xml_bad_json": (
+            "A <state_update> tag was found, but the JSON inside it was invalid. "
+            "Resend the same intended state with corrected JSON syntax only. "
+            "Do not change the intended meaning unless necessary."
+        ),
+        "json_block_no_xml": (
+            "You used a Markdown JSON block. "
+            "Wrap the same JSON object in <state_update> tags and remove code fences."
+        ),
+        "file_reference": (
+            "You wrote or referenced a state file. "
+            "The state must be in your response text. "
+            "Paste the state block directly. "
+            "Do not mention file paths."
+        ),
+        "truncated_xml": (
+            "The previous output appears truncated. "
+            "Keep the payload concise. "
+            "Omit logs and long reports. "
+            "Output the complete <state_update> element with a closing tag."
+        ),
+    }
+
+    STATE_TAG_OPEN_RE = re.compile(r"<\s*state_update\s*>", re.IGNORECASE)
+    STATE_TAG_CLOSE_RE = re.compile(r"</\s*state_update\s*>", re.IGNORECASE)
 
     PROTECTED_STATE_KEYS = {
         "current_phase",
@@ -334,6 +373,19 @@ class ExecutionEngine:
         role = str(getattr(agent, "role", "")).strip().lower()
         return role in self.COMPLETION_ROLES_FALLBACK
 
+    @staticmethod
+    def _coerce_is_complete(value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, (int, float)):
+            return bool(value)
+
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "on"}
+
+        return False
+
     def _normalize_state_update(
         self,
         state_data: dict,
@@ -381,6 +433,17 @@ class ExecutionEngine:
         payload = normalized.get("payload")
         if isinstance(payload, dict):
             payload.pop("_openloop", None)
+
+        if "is_complete" in normalized:
+            if not isinstance(normalized["is_complete"], bool):
+                self.log(
+                    f"  NOTE: Coercing non-boolean is_complete from "
+                    f"'{agent.name}': {normalized['is_complete']!r}"
+                )
+
+            normalized["is_complete"] = self._coerce_is_complete(
+                normalized["is_complete"]
+            )
 
         if (
             not self._agent_may_complete(agent)
@@ -623,7 +686,7 @@ class ExecutionEngine:
                     f"correction attempt {attempt + 1}/{self.MAX_CORRECTIONS}"
                 )
                 reason = self._classify_state_failure(result.output)
-                prompt = self._build_correction_prompt(reason, agent_name)
+                prompt = self._build_correction_prompt(reason, agent, attempt + 1)
             else:
                 self.log(
                     "  Max corrections reached — no valid state update found"
@@ -685,7 +748,13 @@ class ExecutionEngine:
 
         lower = stdout.lower()
 
-        if "<state_update>" in lower:
+        has_open = bool(self.STATE_TAG_OPEN_RE.search(stdout))
+        has_close = bool(self.STATE_TAG_CLOSE_RE.search(stdout))
+
+        if has_open and not has_close:
+            return "truncated_xml"
+
+        if has_open:
             return "xml_bad_json"
 
         if "```json" in lower or "```" in lower:
@@ -699,29 +768,61 @@ class ExecutionEngine:
     def _build_correction_prompt(
         self,
         reason: str,
-        agent_name: str,
+        agent: AgentDefinition | str,
+        attempt: int = 1,
         base_prompt: Optional[str] = None,
     ) -> str:
-        category = reason
-        detail = ""
-
-        if category == "xml_bad_json":
-            prompt = "Your <state_update> tag was found but the JSON is invalid."
-        elif category == "json_block_no_xml":
-            prompt = "You used a ```json code block. Use <state_update> XML tags instead."
-        elif category == "file_reference":
-            prompt = "The state update must be in your response text, not in a file."
+        if isinstance(agent, AgentDefinition):
+            agent_name = agent.name
+            may_complete = self._agent_may_complete(agent)
         else:
-            prompt = "No valid state update was found in your response."
+            agent_name = str(agent)
+            try:
+                loaded_agent = self.agent_loader.get_agent(agent_name)
+                may_complete = self._agent_may_complete(loaded_agent)
+            except Exception:
+                may_complete = False
 
-        return (
-            "CORRECTION — State Update Required\n\n"
-            f"{prompt}\n\n"
-            "Output exactly one <state_update> block with valid JSON, and nothing else:\n\n"
-            "<state_update>\n"
-            '{"is_complete": false, "payload": {"summary": "..."}}\n'
-            "</state_update>"
+        failure = self.CORRECTION_FAILURE_HINTS.get(
+            reason,
+            "Return the OpenLoop state now.",
         )
+
+        if may_complete:
+            completion = (
+                "Set is_complete=true only if your completion criteria are truly met; "
+                "otherwise set is_complete=false. The example shows syntax only."
+            )
+        else:
+            completion = "Set is_complete=false."
+
+        if attempt <= 1:
+            return "\n".join([
+                "STATE UPDATE REQUIRED",
+                "",
+                f"You are '{agent_name}'. {failure}",
+                "No further work is needed in this turn. Return the OpenLoop state now.",
+                "",
+                "Reply with exactly one <state_update> element containing one strict JSON object, using real values:",
+                "",
+                self.CORRECTION_EXAMPLE,
+                "",
+                completion,
+            ])
+
+        return "\n".join([
+            "FINAL STATE UPDATE REQUIRED",
+            "",
+            f"You are '{agent_name}'. This is the last automatic correction. {failure}",
+            "No further work is needed in this turn. Return the OpenLoop state now.",
+            "",
+            "Reply with exactly one <state_update> element containing one strict JSON object, using real values:",
+            "",
+            self.CORRECTION_EXAMPLE,
+            "",
+            "If completion is not possible, set is_complete=false and describe the blocker briefly in payload.",
+            completion,
+        ])
 
     def _evaluate_end_condition(self, condition: str) -> bool:
         if condition == "is_complete == True":
