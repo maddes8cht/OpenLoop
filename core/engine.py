@@ -622,10 +622,8 @@ class ExecutionEngine:
                     f"  State update missing or invalid — "
                     f"correction attempt {attempt + 1}/{self.MAX_CORRECTIONS}"
                 )
-                prompt = self._build_correction_prompt(
-                    "No valid <state_update> block was found in the agent output.",
-                    agent_name,
-                )
+                reason = self._classify_state_failure(result.output)
+                prompt = self._build_correction_prompt(reason, agent_name)
             else:
                 self.log(
                     "  Max corrections reached — no valid state update found"
@@ -681,38 +679,48 @@ class ExecutionEngine:
             f"- Valid top-level keys are: is_complete, termination_reason, payload.\n"
         )
 
+    def _classify_state_failure(self, stdout: str) -> str:
+        if not stdout or not stdout.strip():
+            return "missing"
+
+        lower = stdout.lower()
+
+        if "<state_update>" in lower:
+            return "xml_bad_json"
+
+        if "```json" in lower or "```" in lower:
+            return "json_block_no_xml"
+
+        if "state_update.json" in lower:
+            return "file_reference"
+
+        return "missing"
+
     def _build_correction_prompt(
         self,
-        error: str,
+        reason: str,
         agent_name: str,
         base_prompt: Optional[str] = None,
     ) -> str:
-        # base_prompt is intentionally ignored.
-        # Correction runs use -c and therefore already have the previous context.
+        category = reason
+        detail = ""
+
+        if category == "xml_bad_json":
+            prompt = "Your <state_update> tag was found but the JSON is invalid."
+        elif category == "json_block_no_xml":
+            prompt = "You used a ```json code block. Use <state_update> XML tags instead."
+        elif category == "file_reference":
+            prompt = "The state update must be in your response text, not in a file."
+        else:
+            prompt = "No valid state update was found in your response."
+
         return (
-            "SYSTEM NOTICE: Your previous response did not contain a valid state update.\n"
-            f"Agent: {agent_name}\n"
-            f"Error: {error}\n\n"
-            "A file, report, Markdown document, test report, gap analysis, "
-            "issue note, or log entry is NOT a state update.\n\n"
-            "Based on the work you have already done, reply now with ONLY one valid JSON object "
-            "wrapped in <state_update> tags.\n\n"
-            "All custom fields MUST be inside payload.\n"
-            "Do not ask questions.\n"
-            "Do not redo your original task.\n"
-            "Do not repeat your analysis.\n"
-            "Do not add explanations outside the tags.\n"
-            "Do not write files as a substitute for the state update.\n"
-            "Do not modify meta or _openloop.\n"
-            "Keep the completion rules from your original role instructions.\n\n"
-            "The JSON must be strict: no comments, no trailing commas. Use null for unknown values.\n"
-            "Allowed top-level keys: is_complete, termination_reason, payload.\n"
-            "If unsure or blocked, still output a state update with \"is_complete\": false "
-            "and a short explanation in payload.summary.\n\n"
-            "Example:\n"
+            "CORRECTION — State Update Required\n\n"
+            f"{prompt}\n\n"
+            "Output exactly one <state_update> block with valid JSON, and nothing else:\n\n"
             "<state_update>\n"
-            '{"is_complete": false, "payload": {"summary": "short factual summary"}}\n'
-            "</state_update>\n"
+            '{"is_complete": false, "payload": {"summary": "..."}}\n'
+            "</state_update>"
         )
 
     def _evaluate_end_condition(self, condition: str) -> bool:
