@@ -1,0 +1,15 @@
+{
+  "preparation_agents": [
+    "proteus"
+  ],
+  "loop_agents": [
+    "amala",
+    "vera"
+  ],
+  "finalization_agents": [],
+  "max_loops": 10,
+  "end_state_condition": "is_complete == True",
+  "finalize_on_abort": false,
+  "workdir": "G:/GitHub/Traders",
+  "init_script": "G:/GitHub/OpenLoop/init/yfinance-env.cmd"
+}

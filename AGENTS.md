@@ -43,10 +43,12 @@ Three phases run sequentially: **preparation** → **loop** → **finalization**
 Each agent invocation:
 1. Serialize `WorkflowState` to JSON
 2. Append it to the agent's system prompt under `# Current State`
-3. Run `opencode run <prompt>`
+3. Write the full prompt to `current_prompt.md` in the configured `log_dir`, then run:
+   `opencode run --file <path> --dir <workdir> "Follow the instructions in the attached file exactly."`
 4. Parse stdout for `<state_update>...</state_update>` (XML) or ````json...```` (fallback)
-5. Merge parsed dict into state
-6. Evaluate `end_state_condition` (restricted Python `eval` with `is_complete`, `iteration`, `termination_reason`, `phase`, `payload`)
+5. Normalize the parsed dict (`_normalize_state_update`): unknown keys moved into `payload`; `is_complete=true` blocked for agents without authorization
+6. Merge normalized dict into state
+7. Evaluate `end_state_condition` (restricted Python `eval` with `is_complete`, `iteration`, `termination_reason`, `phase`, `payload`, `meta`)
 
 ### Gotchas
 
@@ -59,3 +61,7 @@ Each agent invocation:
 - Init script extension detection: `.ps1` → `pwsh`, `.bat`/`.cmd` → `call`, `.sh` → `sh`, else treated as inline command.
 - `max_loops` defaults to config `default_max_loops` (10) if not in workflow data.
 - Exit codes: 0 = completed, 1 = max_loops/agent_error/stopped.
+- `is_complete=true` is only honored for agents with `can_complete: true` in frontmatter or roles `auditor`/`approver`/`finalizer`/`finalization`. Other agents' `is_complete=true` is forced to `false` and logged.
+- Unknown keys in a state update are silently **moved into `payload`** (not dropped). Keys `current_phase`, `iteration`, `meta` are protected and ignored.
+- The prompt is delivered as a file (`current_prompt.md`) to avoid OS command-line length limits, not as a CLI argument.
+- If an agent returns no valid state update after `MAX_CORRECTIONS` (2) retries, the engine prompts interactively (TTY) or aborts (non-interactive).

@@ -7,6 +7,7 @@ class AgentDefinition:
     name: str
     role: str
     expected_output_format: str = "json_block"
+    can_complete: bool = False
     system_prompt: str = ""
 
 
@@ -17,6 +18,7 @@ class AgentLoader:
     def list_agents(self) -> list[str]:
         if not self._agents_dir.exists():
             return []
+
         return sorted(
             f.stem for f in self._agents_dir.iterdir()
             if f.suffix == ".md"
@@ -24,10 +26,12 @@ class AgentLoader:
 
     def get_agent(self, name: str) -> AgentDefinition:
         path = self._agents_dir / f"{name}.md"
+
         if not path.exists():
             raise FileNotFoundError(
                 f"Agent '{name}' not found at {path}"
             )
+
         return self._load_file(path)
 
     def load_all(self) -> list[AgentDefinition]:
@@ -39,20 +43,32 @@ class AgentLoader:
 
         name = frontmatter.get("name", path.stem)
         role = frontmatter.get("role", "")
+
         expected_output_format = frontmatter.get(
-            "expected_output_format", "json_block"
+            "expected_output_format",
+            "json_block",
+        )
+
+        can_complete_raw = frontmatter.get("can_complete", "false")
+        can_complete = str(can_complete_raw).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
         )
 
         return AgentDefinition(
             name=name,
             role=role,
             expected_output_format=expected_output_format,
+            can_complete=can_complete,
             system_prompt=system_prompt,
         )
 
     @staticmethod
     def _parse_frontmatter(content: str) -> tuple[dict, str]:
         lines = content.split("\n")
+
         if not lines or lines[0].strip() != "---":
             raise ValueError(
                 "Missing YAML frontmatter: file must start with '---'"
@@ -70,10 +86,13 @@ class AgentLoader:
             )
 
         frontmatter = {}
+
         for line in lines[1:end_idx]:
             stripped = line.strip()
+
             if not stripped or stripped.startswith("#"):
                 continue
+
             if ":" in stripped:
                 key, _, value = stripped.partition(":")
                 frontmatter[key.strip()] = value.strip()

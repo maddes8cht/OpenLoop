@@ -1,7 +1,10 @@
 import json
+import sys
 import threading
+import uuid
+import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -10,6 +13,9 @@ from core.config import Config, strip_jsonc
 from core.parser import StateParser
 from core.runner import OpenCodeOptions, OpenCodeRunner, RunResult
 from core.state import WorkflowState
+
+
+MissingStateHandler = Callable[[str, Optional[Path]], bool]
 
 
 @dataclass
@@ -24,9 +30,38 @@ class WorkflowConfig:
     init_script: Optional[str] = None
     opencode_defaults: OpenCodeOptions = field(default_factory=OpenCodeOptions)
 
+    @staticmethod
+    def _clean_agent_list(value: object) -> list[str]:
+        if isinstance(value, str):
+            value = [value]
+
+        if not isinstance(value, list):
+            return []
+
+        cleaned: list[str] = []
+
+        for item in value:
+            if item is None:
+                continue
+
+            s = str(item).strip()
+            if s:
+                cleaned.append(s)
+
+        return cleaned
+
+    @staticmethod
+    def _clean_optional_str(value: object) -> Optional[str]:
+        if value is None:
+            return None
+
+        s = str(value).strip()
+        return s or None
+
     @classmethod
     def load(cls, path: str | Path) -> "WorkflowConfig":
         p = Path(path)
+
         try:
             raw = json.loads(strip_jsonc(p.read_text(encoding="utf-8")))
         except FileNotFoundError:
@@ -41,39 +76,45 @@ class WorkflowConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> "WorkflowConfig":
+        # Robust against accidental trailing spaces in keys.
+        data = {
+            str(k).strip(): v
+            for k, v in data.items()
+            if isinstance(k, str)
+        }
+
         prep = data.get("preparation_agents")
         if prep is None:
             prep = data.get("preparation_agent")
-        if isinstance(prep, str):
-            prep = [prep]
-        elif not isinstance(prep, list):
-            prep = []
 
         final = data.get("finalization_agents")
         if final is None:
             final = data.get("finalization_agent")
-        if isinstance(final, str):
-            final = [final]
-        elif not isinstance(final, list):
-            final = []
 
         opencode_opts = OpenCodeOptions()
         if "opencode_defaults" in data and isinstance(data["opencode_defaults"], dict):
             opencode_opts = OpenCodeOptions.from_dict(data["opencode_defaults"])
 
+        end_state_condition = cls._clean_optional_str(
+            data.get("end_state_condition")
+        ) or cls.end_state_condition
+
+        try:
+            max_loops = int(data.get("max_loops", cls.max_loops))
+        except (TypeError, ValueError):
+            max_loops = cls.max_loops
+
         return cls(
-            preparation_agents=prep,
-            loop_agents=list(data.get("loop_agents", [])),
-            finalization_agents=final,
-            end_state_condition=str(
-                data.get("end_state_condition", cls.end_state_condition)
-            ),
-            max_loops=int(data.get("max_loops", cls.max_loops)),
+            preparation_agents=cls._clean_agent_list(prep),
+            loop_agents=cls._clean_agent_list(data.get("loop_agents")),
+            finalization_agents=cls._clean_agent_list(final),
+            end_state_condition=end_state_condition,
+            max_loops=max_loops,
             finalize_on_abort=bool(
                 data.get("finalize_on_abort", cls.finalize_on_abort)
             ),
-            workdir=data.get("workdir"),
-            init_script=data.get("init_script"),
+            workdir=cls._clean_optional_str(data.get("workdir")),
+            init_script=cls._clean_optional_str(data.get("init_script")),
             opencode_defaults=opencode_opts,
         )
 
@@ -88,9 +129,11 @@ class WorkflowConfig:
             "workdir": self.workdir,
             "init_script": self.init_script,
         }
+
         opts_dict = self.opencode_defaults.to_dict()
         if opts_dict:
             d["opencode_defaults"] = opts_dict
+
         return d
 
 
@@ -98,6 +141,67 @@ LogCallback = Callable[[str], None]
 
 
 class ExecutionEngine:
+    MAX_CORRECTIONS = 2
+
+    CORRECTION_EXAMPLE = (
+        "<state_update>\n"
+        '{"is_complete": false, "payload": {"summary": "Brief factual summary of completed work"}}\n'
+        "</state_update>"
+    )
+
+    CORRECTION_FAILURE_HINTS = {
+        "missing": (
+            "The previous response contained no usable state block. "
+            "Reconstruct the state from the work already done and output it now. "
+            "Do not redo the original task."
+        ),
+        "xml_bad_json": (
+            "A <state_update> tag was found, but the JSON inside it was invalid. "
+            "Resend the same intended state with corrected JSON syntax only. "
+            "Do not change the intended meaning unless necessary."
+        ),
+        "json_block_no_xml": (
+            "You used a Markdown JSON block. "
+            "Wrap the same JSON object in <state_update> tags and remove code fences."
+        ),
+        "file_reference": (
+            "You wrote or referenced a state file. "
+            "The state must be in your response text. "
+            "Paste the state block directly. "
+            "Do not mention file paths."
+        ),
+        "truncated_xml": (
+            "The previous output appears truncated. "
+            "Keep the payload concise. "
+            "Omit logs and long reports. "
+            "Output the complete <state_update> element with a closing tag."
+        ),
+    }
+
+    STATE_TAG_OPEN_RE = re.compile(r"<\s*state_update\s*>", re.IGNORECASE)
+    STATE_TAG_CLOSE_RE = re.compile(r"</\s*state_update\s*>", re.IGNORECASE)
+
+    PROTECTED_STATE_KEYS = {
+        "current_phase",
+        "iteration",
+        "meta",
+    }
+
+    KNOWN_STATE_KEYS = {
+        "is_complete",
+        "termination_reason",
+        "payload",
+    }
+
+    # Fallback for older agent definitions without explicit can_complete field.
+    # For explicit control, add can_complete: true/false to agent frontmatter.
+    COMPLETION_ROLES_FALLBACK = {
+        "auditor",
+        "approver",
+        "finalizer",
+        "finalization",
+    }
+
     def __init__(
         self,
         config: Optional[Config] = None,
@@ -106,37 +210,55 @@ class ExecutionEngine:
         no_log_file: bool = False,
         log_file: Optional[str] = None,
         timeout: Optional[int] = None,
+        missing_state_handler: Optional[MissingStateHandler] = None,
     ):
         self.config = config or Config()
         self.logger = logger or (lambda msg: print(f"[OpenLoop] {msg}"))
         self.state = WorkflowState()
         self.agent_loader = AgentLoader(self.config.agents_dir)
+
         self._timeout = timeout if timeout is not None else self.config.default_timeout
         self.runner = OpenCodeRunner(
             binary=self.config.opencode_binary,
             timeout=self._timeout,
         )
+
         self._stop_event = stop_event or threading.Event()
+
         self._log_handle = None
         self._log_path: Optional[Path] = None
+        self._log_dir: Optional[Path] = None
         self._no_log_file = no_log_file
         self._log_file_arg = log_file
+
+        self._workdir: Optional[str] = None
+        self._init_script: Optional[str] = None
+        self._opencode_opts = OpenCodeOptions()
+
+        self._missing_state_handler = missing_state_handler
 
     # ---- File logging ----
 
     def _init_log(self, workdir: Optional[str] = None) -> None:
         if self._no_log_file:
             return
+
         if self._log_file_arg:
             self._log_path = Path(self._log_file_arg)
+            self._log_dir = self._log_path.parent
         else:
             log_dir = Path(self.config.log_dir)
             if not log_dir.is_absolute() and workdir:
                 log_dir = Path(workdir) / log_dir
+
+            self._log_dir = log_dir
+
             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
             self._log_path = log_dir / f"openloop-run-{ts}.log"
+
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log_handle = self._log_path.open("w", encoding="utf-8")
+
         self._write_log(
             f"OpenLoop run started at "
             f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
@@ -157,27 +279,221 @@ class ExecutionEngine:
             self._log_handle.flush()
 
     def _write_banner(self, agent_name: str) -> None:
+        run_id = self._get_run_id()
+
         self._write_log(
-            f"{'='*70}\n"
+            f"{'=' * 70}\n"
             f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
             f"Agent: {agent_name} | Phase: {self.state.current_phase} | "
-            f"Iteration: {self.state.iteration}\n"
-            f"{'='*70}\n\n"
+            f"Iteration: {self.state.iteration} | Run ID: {run_id}\n"
+            f"{'=' * 70}\n\n"
         )
 
-    def execute_workflow(
-        self, workflow_path: str | Path
-    ) -> WorkflowState:
+    # ---- Run metadata ----
+
+    def _init_run_meta(self) -> None:
+        now = datetime.now(timezone.utc)
+
+        run_id = (
+            f"{now.strftime('%Y%m%d-%H%M%SZ')}"
+            f"-{uuid.uuid4().hex[:6]}"
+        )
+
+        meta = {
+            "run_id": run_id,
+            "started_at": now.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        }
+
+        # Preferred: dedicated top-level meta block, if state.py supports it.
+        if hasattr(self.state, "meta"):
+            self.state.meta = meta
+        else:
+            # Fallback for older state definitions without explicit meta field.
+            self.state.payload.setdefault("_openloop", {}).update(meta)
+
+    def _get_run_id(self) -> str:
+        meta = getattr(self.state, "meta", None)
+        if isinstance(meta, dict):
+            run_id = meta.get("run_id")
+            if run_id:
+                return str(run_id)
+
+        openloop_meta = self.state.payload.get("_openloop")
+        if isinstance(openloop_meta, dict):
+            return str(openloop_meta.get("run_id", ""))
+
+        return ""
+
+    # ---- Missing state policy ----
+
+    def _default_missing_state_handler(
+        self,
+        agent_name: str,
+        log_path: Optional[Path],
+    ) -> bool:
+        self.log(
+            f"  WARNING: Agent '{agent_name}' did not provide "
+            f"a valid state update."
+        )
+
+        if log_path:
+            self.log(f"  Inspect agent output in: {log_path}")
+
+        try:
+            if sys.stdin and sys.stdin.isatty():
+                answer = input(
+                    "Continue workflow anyway at your own risk? [y/N] "
+                ).strip().lower()
+                return answer in {"y", "yes"}
+        except Exception as exc:
+            self.log(f"  WARNING: Interactive prompt failed: {exc}")
+
+        self.log(
+            "  Non-interactive session — aborting due to missing state update."
+        )
+        return False
+
+    def _handle_missing_state(self, agent_name: str) -> bool:
+        handler = self._missing_state_handler or self._default_missing_state_handler
+
+        try:
+            return bool(handler(agent_name, self._log_path))
+        except Exception as exc:
+            self.log(f"  WARNING: missing-state handler failed: {exc}")
+            return False
+
+    # ---- State normalization and authorization ----
+
+    def _agent_may_complete(self, agent: AgentDefinition) -> bool:
+        can_complete = getattr(agent, "can_complete", None)
+
+        if isinstance(can_complete, bool):
+            return can_complete
+
+        role = str(getattr(agent, "role", "")).strip().lower()
+        return role in self.COMPLETION_ROLES_FALLBACK
+
+    @staticmethod
+    def _coerce_is_complete(value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, (int, float)):
+            return bool(value)
+
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "on"}
+
+        return False
+
+    def _normalize_state_update(
+        self,
+        state_data: dict,
+        agent: AgentDefinition,
+    ) -> dict:
+        normalized: dict = {}
+        moved: dict = {}
+
+        ignored_protected = [
+            k for k in state_data
+            if k in self.PROTECTED_STATE_KEYS
+        ]
+
+        if ignored_protected:
+            self.log(
+                f"  NOTE: Ignoring protected key(s) from agent state: "
+                f"{ignored_protected}"
+            )
+
+        for key, value in state_data.items():
+            if key in self.PROTECTED_STATE_KEYS:
+                continue
+
+            if key in self.KNOWN_STATE_KEYS:
+                normalized[key] = value
+            else:
+                moved[key] = value
+
+        if moved:
+            payload = normalized.get("payload")
+            if not isinstance(payload, dict):
+                payload = {}
+
+            for k, v in moved.items():
+                payload.setdefault(k, v)
+
+            normalized["payload"] = payload
+
+            self.log(
+                f"  NOTE: Moved non-top-level key(s) into payload: "
+                f"{sorted(moved.keys())}"
+            )
+
+        # Protect fallback meta location as well.
+        payload = normalized.get("payload")
+        if isinstance(payload, dict):
+            payload.pop("_openloop", None)
+
+        if "is_complete" in normalized:
+            if not isinstance(normalized["is_complete"], bool):
+                self.log(
+                    f"  NOTE: Coercing non-boolean is_complete from "
+                    f"'{agent.name}': {normalized['is_complete']!r}"
+                )
+
+            normalized["is_complete"] = self._coerce_is_complete(
+                normalized["is_complete"]
+            )
+
+        if (
+            not self._agent_may_complete(agent)
+            and normalized.get("is_complete") is True
+        ):
+            self.log(
+                f"  WARNING: Agent '{agent.name}' is not allowed to set "
+                f"is_complete=true. Forcing false."
+            )
+
+            normalized["is_complete"] = False
+
+            payload = normalized.get("payload")
+            if not isinstance(payload, dict):
+                payload = {}
+
+            payload.setdefault("completion_blocked", True)
+            payload.setdefault(
+                "completion_blocked_reason",
+                f"{agent.name} is not authorized to complete the workflow",
+            )
+
+            normalized["payload"] = payload
+
+        return normalized
+
+    # ---- Workflow execution ----
+
+    def execute_workflow(self, workflow_path: str | Path) -> WorkflowState:
         workflow = WorkflowConfig.load(workflow_path)
         return self.execute_workflow_data(workflow.to_dict())
 
     def execute_workflow_data(self, data: dict) -> WorkflowState:
-        workflow = WorkflowConfig.from_dict(data)
+        clean_data = {
+            str(k).strip(): v
+            for k, v in data.items()
+            if isinstance(k, str)
+        }
+
+        workflow = WorkflowConfig.from_dict(clean_data)
+
         self.state = WorkflowState()
-        self.log(f"Loaded workflow: {workflow.loop_agents}")
+        self._init_run_meta()
 
         self._workdir = workflow.workdir or self.config.workdir
         self._init_log(self._workdir)
+
+        self.log(f"Loaded workflow: {workflow.loop_agents}")
+        self.log(f"Run ID: {self._get_run_id()}")
+
         raw_init = workflow.init_script or self.config.init_script
         if raw_init:
             p = Path(raw_init)
@@ -187,51 +503,66 @@ class ExecutionEngine:
                 self._init_script = raw_init
         else:
             self._init_script = None
-        if "max_loops" not in data:
+
+        if "max_loops" not in clean_data:
             workflow.max_loops = self.config.default_max_loops
+
         self._opencode_opts = self.config.opencode_defaults.merge(
             workflow.opencode_defaults
         )
 
         try:
-            self._run_preparation(workflow)
-            if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+            if not self._run_preparation(workflow):
                 return self.state
-            self._run_loop(workflow)
-            if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
+
+            if self._evaluate_end_condition(workflow.end_state_condition):
+                if not self.state.termination_reason:
+                    self.state.termination_reason = "completed"
+            else:
+                if not self._run_loop(workflow):
+                    return self.state
+
+            if not self._run_finalization(workflow):
                 return self.state
-            self._run_finalization(workflow)
 
             return self.state
         finally:
             self._close_log()
 
-    def _run_preparation(self, workflow: WorkflowConfig) -> None:
+    def _run_preparation(self, workflow: WorkflowConfig) -> bool:
         if not workflow.preparation_agents:
             self.log("No preparation agent defined — skipping")
-            return
+            return True
 
         self.state.current_phase = "preparation"
+
         for agent_name in workflow.preparation_agents:
             self.log(f"Preparation phase: {agent_name}")
-            self._execute_agent(agent_name)
-            if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
-                return
 
-    def _run_loop(self, workflow: WorkflowConfig) -> None:
+            if not self._execute_agent(agent_name):
+                return False
+
+            if self._stop_event.is_set():
+                self.state.termination_reason = "stopped"
+                self.log("Execution stopped by user")
+                return False
+
+        return True
+
+    def _run_loop(self, workflow: WorkflowConfig) -> bool:
         if not workflow.loop_agents:
             self.log("No loop agents defined — skipping")
             self.state.is_complete = True
-            return
+            self.state.termination_reason = "completed"
+            return True
 
         self.state.current_phase = "loop"
-        if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
-            return
+
         while self.state.iteration < workflow.max_loops:
             if self._stop_event.is_set():
                 self.state.termination_reason = "stopped"
                 self.log("Execution stopped by user")
-                return
+                return False
 
             self.state.iteration += 1
             self.log(
@@ -240,27 +571,33 @@ class ExecutionEngine:
 
             for agent_name in workflow.loop_agents:
                 self.log(f"  Running agent: {agent_name}")
-                self._execute_agent(agent_name)
 
-                if self.state.termination_reason and self.state.termination_reason.startswith("agent_error:"):
-                    return
+                if not self._execute_agent(agent_name):
+                    return False
 
-                if self._evaluate_end_condition(
-                    workflow.end_state_condition
-                ):
+                if self._stop_event.is_set():
+                    self.state.termination_reason = "stopped"
+                    self.log("Execution stopped by user")
+                    return False
+
+                if self._evaluate_end_condition(workflow.end_state_condition):
                     self.log(
-                        f"  Termination condition met (iteration {self.state.iteration})"
+                        f"  Termination condition met "
+                        f"(iteration {self.state.iteration})"
                     )
                     self.state.termination_reason = "completed"
-                    return
+                    return True
 
         self.state.termination_reason = "max_loops_reached"
-        self.log(f"Max loops ({workflow.max_loops}) reached — terminating loop")
+        self.log(
+            f"Max loops ({workflow.max_loops}) reached — terminating loop"
+        )
+        return True
 
-    def _run_finalization(self, workflow: WorkflowConfig) -> None:
+    def _run_finalization(self, workflow: WorkflowConfig) -> bool:
         if not workflow.finalization_agents:
             self.log("No finalization agent defined — skipping")
-            return
+            return True
 
         should_finalize = (
             self.state.termination_reason == "completed"
@@ -272,77 +609,238 @@ class ExecutionEngine:
 
         if not should_finalize:
             self.log("Finalization skipped (configured to run on completion only)")
-            return
+            return True
 
         self.state.current_phase = "finalization"
+
         for agent_name in workflow.finalization_agents:
             self.log(f"Finalization phase: {agent_name}")
-            self._execute_agent(agent_name)
 
-    def _execute_agent(self, agent_name: str) -> None:
+            if not self._execute_agent(agent_name):
+                return False
+
+            if self._stop_event.is_set():
+                self.state.termination_reason = "stopped"
+                self.log("Execution stopped by user")
+                return False
+
+        return True
+
+    def _execute_agent(self, agent_name: str) -> bool:
         agent = self.agent_loader.get_agent(agent_name)
-        prompt = self._build_prompt(agent)
+
         self._write_banner(agent_name)
 
-        result = self.runner.run(
-            prompt,
-            opts=getattr(self, "_opencode_opts", None),
-            cwd=getattr(self, "_workdir", None),
-            init_script=getattr(self, "_init_script", None),
+        base_prompt = self._build_prompt(agent)
+        prompt = base_prompt
+
+        state_data = None
+
+        for attempt in range(1 + self.MAX_CORRECTIONS):
+            prompt_file = None
+            if self._log_dir is not None:
+                prompt_file = self._log_dir / self.runner.PROMPT_FILENAME
+            else:
+                log_dir = Path(self.config.log_dir)
+                if not log_dir.is_absolute() and self._workdir:
+                    log_dir = Path(self._workdir) / log_dir
+                prompt_file = log_dir / self.runner.PROMPT_FILENAME
+
+            result = self.runner.run(
+                prompt,
+                opts=self._opencode_opts,
+                cwd=self._workdir,
+                init_script=self._init_script,
+                continue_session=(attempt > 0),
+                prompt_file=prompt_file,
+            )
+
+            if result.output:
+                self._write_log(f"[stdout]\n{result.output}\n\n")
+
+            if result.error:
+                self._write_log(f"[stderr]\n{result.error}\n\n")
+
+            if not result.success:
+                self.log(
+                    f"  Agent '{agent_name}' failed "
+                    f"(exit {result.exit_code})"
+                )
+                self.state.termination_reason = f"agent_error:{agent_name}"
+                return False
+
+            # State is extracted exclusively from the agent response.
+            state_data = StateParser.extract_state_update(result.output)
+
+            if state_data is not None:
+                state_data = self._normalize_state_update(state_data, agent)
+
+                if state_data:
+                    break
+
+                state_data = None
+
+            if attempt < self.MAX_CORRECTIONS:
+                self.log(
+                    f"  State update missing or invalid — "
+                    f"correction attempt {attempt + 1}/{self.MAX_CORRECTIONS}"
+                )
+                reason = self._classify_state_failure(result.output)
+                prompt = self._build_correction_prompt(reason, agent, attempt + 1)
+            else:
+                self.log(
+                    "  Max corrections reached — no valid state update found"
+                )
+
+        if state_data is not None:
+            self.state.merge(state_data)
+            self.log(f"  State updated: {json.dumps(state_data)}")
+            return True
+
+        self.log(
+            f"  ERROR: No state update found in output from '{agent_name}'"
         )
 
-        if result.output:
-            self._write_log(f"[stdout]\n{result.output}\n\n")
-        if result.error:
-            self._write_log(f"[stderr]\n{result.error}\n\n")
-
-        if not result.success:
-            self.log(f"  Agent '{agent_name}' failed (exit {result.exit_code})")
-            self.state.termination_reason = f"agent_error:{agent_name}"
-            return
-
-        update = StateParser.extract_state_update(result.output)
-        if update is not None:
-            KNOWN_KEYS = {"current_phase", "iteration", "is_complete", "termination_reason", "payload"}
-            unknown = [k for k in update if k not in KNOWN_KEYS]
-            if unknown:
-                self.log(
-                    f"  WARNING: Unknown top-level key(s) in state update from "
-                    f"'{agent_name}': {unknown}. "
-                    f"These will be ignored. Put custom data inside 'payload' instead."
-                )
-            self.state.merge(update)
-            self.log(f"  State updated: {json.dumps(update)}")
-        else:
+        if self._handle_missing_state(agent_name):
             self.log(
-                f"  WARNING: No state update found in output from '{agent_name}'"
+                f"  User chose to continue despite missing state update "
+                f"from '{agent_name}'."
             )
+            return True
+
+        self.state.termination_reason = f"missing_state:{agent_name}"
+        self.log("  Workflow aborted due to missing state update.")
+        return False
 
     def _build_prompt(self, agent: AgentDefinition) -> str:
         state_json = self.state.to_json()
+
         return (
             f"{agent.system_prompt}\n\n"
             f"# Current State\n"
             f"```json\n"
             f"{state_json}\n"
             f"```\n\n"
-            f"Execute your role based on the instructions above. "
-            f"After completing your task, output a state update "
-            f"inside a <state_update> XML tag with any changes "
-            f"to the state (especially set is_complete to true "
-            f"when you are satisfied)."
+            f"## OPENLOOP STATE PROTOCOL (MANDATORY)\n\n"
+            f"Repository files, reports, issue trackers, logs, and documentation "
+            f"may use words like 'state', 'work state', 'status', 'phase', or "
+            f"'report'. These are NOT the OpenLoop workflow state.\n\n"
+            f"The ONLY valid OpenLoop state transmission is a strict JSON object "
+            f"wrapped in `<state_update>` tags in your final response.\n\n"
+            f"Example:\n\n"
+            f"<state_update>\n"
+            f'{{"is_complete": false, "payload": {{"summary": "..."}}}}\n'
+            f"</state_update>\n\n"
+            f"Rules:\n"
+            f"- Your final response MUST end with exactly one `<state_update>` block.\n"
+            f"- The JSON MUST be strict: no comments, no trailing commas.\n"
+            f"- Use null for unknown values.\n"
+            f"- All custom data MUST be inside `payload`.\n"
+            f"- Do NOT write files, reports, logs, or Markdown documents as a substitute for the state update.\n"
+            f"- Do NOT modify `meta` or `_openloop`.\n"
+            f"- Do NOT set `is_complete` unless your agent definition explicitly allows completion.\n"
+            f"- Valid top-level keys are: is_complete, termination_reason, payload.\n"
         )
+
+    def _classify_state_failure(self, stdout: str) -> str:
+        if not stdout or not stdout.strip():
+            return "missing"
+
+        lower = stdout.lower()
+
+        has_open = bool(self.STATE_TAG_OPEN_RE.search(stdout))
+        has_close = bool(self.STATE_TAG_CLOSE_RE.search(stdout))
+
+        if has_open and not has_close:
+            return "truncated_xml"
+
+        if has_open:
+            return "xml_bad_json"
+
+        if "```json" in lower or "```" in lower:
+            return "json_block_no_xml"
+
+        if "state_update.json" in lower:
+            return "file_reference"
+
+        return "missing"
+
+    def _build_correction_prompt(
+        self,
+        reason: str,
+        agent: AgentDefinition | str,
+        attempt: int = 1,
+        base_prompt: Optional[str] = None,
+    ) -> str:
+        if isinstance(agent, AgentDefinition):
+            agent_name = agent.name
+            may_complete = self._agent_may_complete(agent)
+        else:
+            agent_name = str(agent)
+            try:
+                loaded_agent = self.agent_loader.get_agent(agent_name)
+                may_complete = self._agent_may_complete(loaded_agent)
+            except Exception:
+                may_complete = False
+
+        failure = self.CORRECTION_FAILURE_HINTS.get(
+            reason,
+            "Return the OpenLoop state now.",
+        )
+
+        if may_complete:
+            completion = (
+                "Set is_complete=true only if your completion criteria are truly met; "
+                "otherwise set is_complete=false. The example shows syntax only."
+            )
+        else:
+            completion = "Set is_complete=false."
+
+        if attempt <= 1:
+            return "\n".join([
+                "STATE UPDATE REQUIRED",
+                "",
+                f"You are '{agent_name}'. {failure}",
+                "No further work is needed in this turn. Return the OpenLoop state now.",
+                "",
+                "Reply with exactly one <state_update> element containing one strict JSON object, using real values:",
+                "",
+                self.CORRECTION_EXAMPLE,
+                "",
+                completion,
+            ])
+
+        return "\n".join([
+            "FINAL STATE UPDATE REQUIRED",
+            "",
+            f"You are '{agent_name}'. This is the last automatic correction. {failure}",
+            "No further work is needed in this turn. Return the OpenLoop state now.",
+            "",
+            "Reply with exactly one <state_update> element containing one strict JSON object, using real values:",
+            "",
+            self.CORRECTION_EXAMPLE,
+            "",
+            "If completion is not possible, set is_complete=false and describe the blocker briefly in payload.",
+            completion,
+        ])
 
     def _evaluate_end_condition(self, condition: str) -> bool:
         if condition == "is_complete == True":
             return bool(self.state.is_complete)
+
+        meta = getattr(self.state, "meta", None)
+        if not isinstance(meta, dict):
+            meta = self.state.payload.get("_openloop", {})
+
         ns = {
             "is_complete": self.state.is_complete,
             "iteration": self.state.iteration,
             "termination_reason": self.state.termination_reason,
             "phase": self.state.current_phase,
             "payload": self.state.payload,
+            "meta": meta,
         }
+
         try:
             return bool(eval(condition, {"__builtins__": {}}, ns))
         except Exception as exc:
