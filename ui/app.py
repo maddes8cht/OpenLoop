@@ -874,9 +874,8 @@ class WorkflowApp:
         log_dir = self._log_dir_var.get().strip() or ".openloop"
         p = Path(log_dir)
         if not p.is_absolute():
-            wd = self._workdir_var.get().strip()
-            if wd:
-                p = Path(wd) / log_dir
+            cfg = self._config.log_dir if self._config else ".openloop"
+            p = self._openloop_dir / cfg
         path = filedialog.askdirectory(
             title="Select Log Directory",
             initialdir=str(p),
