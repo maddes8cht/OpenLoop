@@ -1,0 +1,23 @@
+{
+  // Full test-generation pipeline: prepare → loop → finalize.
+  // 1. PREPARATION — Proteus analyses the existing test suite.
+  // 2. LOOP — Amala analyses code, Vera generates/improves tests.
+  //    Iterates until Vera marks the loop complete.
+  // 3. FINALIZATION — Dike reviews the final result and cleans up.
+  // workdir and init_script are examples — adjust for your repo.
+  "preparation_agents": [
+    "proteus"
+  ],
+  "loop_agents": [
+    "amala",
+    "vera"
+  ],
+  "finalization_agents": [
+    "dike"
+  ],
+  "max_loops": 10,
+  "end_state_condition": "is_complete == True",
+  "finalize_on_abort": false,
+  "workdir": "G:\\GitHub\\Traders",
+  "init_script": "init\\yfinance-env.cmd"
+}
