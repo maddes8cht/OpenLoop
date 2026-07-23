@@ -37,7 +37,7 @@ Agents are defined as simple Markdown files with YAML frontmatter. This keeps th
 ---
 name: vera
 role: auditor
-expected_output_format: state_file
+can_complete: true
 ---
 
 # Role
@@ -49,23 +49,22 @@ The orchestrator will inject the current state below.
 # Instructions
 1. Review the code and test coverage.
 2. Update the state based on your findings.
-3. Write the current state to `.openloop/state_update.json` at the end of your work.
 
-Example (`.openloop/state_update.json`):
-```json
-{
-  "is_complete": false,
-  "payload": {
-    "feedback": "Missing edge case in auth.py line 42"
-  }
-}
+# State Update
+End your response with exactly one `<state_update>` block:
+
+```xml
+<state_update>
+{"is_complete": false, "payload": {"feedback": "Missing edge case in auth.py line 42"}}
+</state_update>
 ```
 ```
 
 ### 2. Externalized State Management
 The orchestrator holds the "Single Source of Truth" in a Python `dataclass`. 
 - **Injection:** Before an agent runs, the current state is serialized to JSON and injected into the `opencode run` prompt.
-- **Extraction:** The engine reads `.openloop/state_update.json` written by the agent. If missing or invalid, it falls back to parsing `<state_update>` XML tags from stdout.
+- **Extraction:** The engine parses `<state_update>` XML tags or JSON code blocks from the agent's stdout via `StateParser.extract_state_update()`.
+- **Normalization:** Unknown keys are moved into `payload`, protected keys (`current_phase`, `iteration`, `meta`) are ignored, and `is_complete` is coerced to boolean with authorization checks.
 - **Transition:** The orchestrator merges the update into the master state and evaluates the termination conditions.
 
 ### 3. Execution Flow
@@ -107,9 +106,9 @@ Every agent invocation follows the same six-step cycle:
 
 1. **Serialize** — The engine serializes the current `WorkflowState` to a JSON string via `state.to_json()`.
 2. **Inject** — The JSON is appended to the agent's system prompt under a `# Current State` heading (see `_build_prompt()` in `core/engine.py`).
-3. **Execute** — The full prompt is sent to `opencode run`, which spawns a headless LLM subprocess in a fresh, isolated context.
-4. **Read** — The engine first reads `.openloop/state_update.json` (written by the agent). If the file is missing or invalid, it makes up to 2 correction attempts via `-c`, then falls back to `StateParser.extract_state_update()` which scans stdout for `<state_update>` XML tags or JSON code blocks.
-5. **Merge** — The parsed key-value pairs are merged into the shared `WorkflowState` via `state.merge()`. Only keys present in the update are changed; the `payload` dict is merged deeply.
+3. **Execute** — The full prompt is written to `current_prompt.md` in the log directory, then `opencode run --file <path> --dir <workdir> "Follow the instructions..."` is launched as a headless LLM subprocess.
+4. **Parse** — The engine calls `StateParser.extract_state_update(result.output)` on the agent's stdout, searching for `<state_update>` XML tags first, then JSON code blocks as fallback. If no valid state update is found, it makes up to 2 correction attempts via `opencode run -c` with a targeted error prompt, then invokes the missing-state handler (interactive prompt in TTY, abort otherwise).
+5. **Normalize & Merge** — Before merging, `_normalize_state_update()` adjusts the parsed dict: unknown keys are moved into `payload`, `is_complete` is coerced to bool, and completion is blocked for unauthorized agents. The result is merged into `WorkflowState` via `merge()`. Only keys present in the update are changed; the `payload` dict is merged deeply.
 6. **Evaluate** — The `end_state_condition` is evaluated. If true, the loop terminates. Otherwise, the next agent in the sequence starts at step 1 with the updated state.
 
 The same cycle applies in all three phases. During the loop phase, the `iteration` counter is incremented before each full pass through the agent sequence.
