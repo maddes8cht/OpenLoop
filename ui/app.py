@@ -414,59 +414,67 @@ class WorkflowApp:
             is_frame, text="Browse", command=self._browse_init_script
         ).pack(side=LEFT, padx=1)
 
+        Label(settings_inner, text="Name:").grid(
+            row=9, column=0, sticky=W, pady=2
+        )
+        self._workflow_name_var = StringVar()
+        Entry(
+            settings_inner, textvariable=self._workflow_name_var, width=24
+        ).grid(row=9, column=1, sticky=W, padx=4)
+
         sep2 = ttk.Separator(settings_inner, orient="horizontal")
-        sep2.grid(row=9, column=0, columnspan=2, sticky=(W, E), pady=4)
+        sep2.grid(row=10, column=0, columnspan=2, sticky=(W, E), pady=4)
 
         # OpenCode Defaults
         Label(
             settings_inner, text="OpenCode Defaults", font=("", 9, "bold")
-        ).grid(row=10, column=0, columnspan=2, sticky=W, pady=(4, 2))
+        ).grid(row=11, column=0, columnspan=2, sticky=W, pady=(4, 2))
 
         Label(settings_inner, text="Model:").grid(
-            row=11, column=0, sticky=W, pady=2
+            row=12, column=0, sticky=W, pady=2
         )
         self._oc_model_var = StringVar()
         Entry(
             settings_inner, textvariable=self._oc_model_var, width=24
-        ).grid(row=11, column=1, sticky=W, padx=4)
+        ).grid(row=12, column=1, sticky=W, padx=4)
 
         Label(settings_inner, text="Agent:").grid(
-            row=12, column=0, sticky=W, pady=2
+            row=13, column=0, sticky=W, pady=2
         )
         self._oc_agent_var = StringVar()
         Entry(
             settings_inner, textvariable=self._oc_agent_var, width=24
-        ).grid(row=12, column=1, sticky=W, padx=4)
+        ).grid(row=13, column=1, sticky=W, padx=4)
 
         Label(settings_inner, text="Variant:").grid(
-            row=13, column=0, sticky=W, pady=2
+            row=14, column=0, sticky=W, pady=2
         )
         self._oc_variant_var = StringVar()
         Entry(
             settings_inner, textvariable=self._oc_variant_var, width=24
-        ).grid(row=13, column=1, sticky=W, padx=4)
+        ).grid(row=14, column=1, sticky=W, padx=4)
 
         self._oc_pure_var = BooleanVar(value=False)
         Checkbutton(
             settings_inner,
             text="Pure Mode (no plugins)",
             variable=self._oc_pure_var,
-        ).grid(row=14, column=0, columnspan=2, sticky=W, pady=2)
+        ).grid(row=15, column=0, columnspan=2, sticky=W, pady=2)
 
         # Logging
         sep3 = ttk.Separator(settings_inner, orient="horizontal")
-        sep3.grid(row=15, column=0, columnspan=2, sticky=(W, E), pady=4)
+        sep3.grid(row=16, column=0, columnspan=2, sticky=(W, E), pady=4)
 
         Label(
             settings_inner, text="Logging", font=("", 9, "bold")
-        ).grid(row=16, column=0, columnspan=2, sticky=W, pady=(4, 2))
+        ).grid(row=17, column=0, columnspan=2, sticky=W, pady=(4, 2))
 
         self._log_dir_var = StringVar(value=".openloop")
         Label(settings_inner, text="Log Dir:").grid(
-            row=17, column=0, sticky=W, pady=2
+            row=18, column=0, sticky=W, pady=2
         )
         ld_frame = Frame(settings_inner)
-        ld_frame.grid(row=17, column=1, sticky=(W, E), padx=4)
+        ld_frame.grid(row=18, column=1, sticky=(W, E), padx=4)
         ld_frame.columnconfigure(0, weight=1)
         Entry(ld_frame, textvariable=self._log_dir_var).pack(
             side=LEFT, fill="x", expand=True
@@ -481,13 +489,13 @@ class WorkflowApp:
             text="Disable file logging",
             variable=self._no_log_file_var,
             command=self._update_log_status,
-        ).grid(row=18, column=0, columnspan=2, sticky=W, pady=2)
+        ).grid(row=19, column=0, columnspan=2, sticky=W, pady=2)
 
         self._log_status_label = Label(
             settings_inner, text="", fg="gray", anchor=W, justify=LEFT
         )
         self._log_status_label.grid(
-            row=19, column=0, columnspan=2, sticky=(W, E), pady=(0, 4), padx=4
+            row=20, column=0, columnspan=2, sticky=(W, E), pady=(0, 4), padx=4
         )
 
         # ---- Column 2: Preview / Output (tabbed, flexible) ----
@@ -728,6 +736,10 @@ class WorkflowApp:
         if oc_defaults:
             data["opencode_defaults"] = oc_defaults
 
+        wname = self._workflow_name_var.get().strip()
+        if wname:
+            data["name"] = wname
+
         return data
 
     def _load_workflow_into_ui(self, data: dict) -> None:
@@ -771,6 +783,8 @@ class WorkflowApp:
             self._workdir_var.set(str(Path(data["workdir"]).resolve()))
         if "init_script" in data:
             self._init_script_var.set(data["init_script"] or "")
+
+        self._workflow_name_var.set(str(data.get("name", "") or ""))
 
         oc_defaults = data.get("opencode_defaults", {})
         if isinstance(oc_defaults, dict):
@@ -897,8 +911,13 @@ class WorkflowApp:
                 if wd:
                     p = Path(wd) / log_dir
             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            name_part = self._workflow_name_var.get().strip()
+            if name_part:
+                filename = f"openloop-run-{name_part}-{ts}.log"
+            else:
+                filename = f"openloop-run-{ts}.log"
             self._log_status_label.config(
-                text=f"Logging to: {p / f'openloop-run-{ts}.log'}"
+                text=f"Logging to: {p / filename}"
             )
 
     # ---- Configuration ----

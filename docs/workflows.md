@@ -6,6 +6,7 @@ Workflow definitions are JSON files stored in `workflows/` (configurable via `wo
 
 ```json
 {
+  "name": "my-coverage-workflow",
   "preparation_agents": ["prepper"],
   "loop_agents": ["amala", "vera"],
   "finalization_agents": ["reporter"],
@@ -20,7 +21,8 @@ Workflow definitions are JSON files stored in `workflows/` (configurable via `wo
 ## Fields
 
 | Field | Type | Default | Description |
-|---|---|---|---|
+|---|---|---|---|---|
+| `name` | string / null | `null` | Optional workflow name. When set, log files are named `openloop-run-{name}-{timestamp}.log` instead of `openloop-run-{timestamp}.log`. Set in the GUI via Settings > Environment > Name. |
 | `preparation_agents` | string / array of strings | `[]` | Agent(s) run once before the loop. Accepts single string or list. Also accepts legacy key `preparation_agent`. |
 | `loop_agents` | array of strings | `[]` | Agent(s) executed in sequence each iteration |
 | `finalization_agents` | string / array of strings | `[]` | Agent(s) run once after the loop. Accepts single string or list. Also accepts legacy key `finalization_agent`. |

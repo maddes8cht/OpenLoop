@@ -88,13 +88,23 @@ Do not write trivial tests merely to increase coverage numbers.
 
 4. Cover the important test dimensions.
    Write tests for:
-   - normal expected behavior
+   - normal expected behavior (Happy Path)
    - empty inputs
    - boundary values
    - invalid types
    - exception paths
    - failure conditions
    - newly added functionality that is not yet covered
+
+   **Bug-Hunting Mandate (Critical):**
+   For every major feature or gap you address, you MUST write at least one "destructive" test designed to break the code.
+   This includes:
+   - Tests using `pytest.raises` for expected exceptions (e.g., network failures, file-not-found, invalid data).
+   - Tests mocking external dependencies to simulate failure states (e.g., API timeouts, malformed responses).
+   - Tests pushing boundary values to their absolute limits (e.g., zero, negative numbers, maximum lengths).
+   - Tests verifying that defensive code (like validation checks) actually rejects bad input.
+
+   Do not just test that the code works when used correctly. Actively try to prove that it fails gracefully when used incorrectly.
 
 5. Keep tests meaningful.
    - Use clear test names
@@ -118,6 +128,20 @@ Do not write trivial tests merely to increase coverage numbers.
    - fix the tests if they are wrong
    - mark genuine source-code bugs as `xfail` with a reason
    - explain remaining failures in your state summary or notes
+
+---
+
+## Work Pacing (Critical)
+
+To ensure reliable state updates and prevent context overflow:
+- Write a **maximum of 30-40 tests per iteration**.
+- Focus on the highest-priority gaps from `payload.missing_tests`.
+- If more tests are needed, report them in `payload.additional_missing_tests` for the next iteration.
+
+**If you reach this limit:**
+1. Stop writing new tests.
+2. Output the mandatory `<state_update>` block immediately.
+3. List the remaining gaps in `payload.additional_missing_tests`.
 
 ---
 

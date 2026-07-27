@@ -355,6 +355,30 @@ class TestStateParser:
         result = StateParser.extract_state_update(text)
         assert result == {"ok": True}
 
+    def test_markdown_fallback_extracts_state(self):
+        from core.parser import StateParser
+
+        text = """<state_update>
+- **is_complete**: false
+- **summary**: Wrote 55 new tests
+- **tests_written**: 55
+- **additional_missing_tests**:
+  - `calculate_tolerance` -> not found
+  - `safe_read_parquet` -> not found
+- **branch**: `main`
+- **commit**: 8095e30
+</state_update>"""
+        result = StateParser.extract_state_update(text)
+        assert result is not None
+        assert result["is_complete"] is False
+        assert result["summary"] == "Wrote 55 new tests"
+        assert result["tests_written"] == 55
+        assert result["additional_missing_tests"] == [
+            "calculate_tolerance", "safe_read_parquet"
+        ]
+        assert result["branch"] == "main"
+        assert result["commit"] == "8095e30"
+
 
 # ===========================================================================
 # core.runner — OpenCodeOptions
@@ -858,6 +882,7 @@ class TestWorkflowConfig:
         assert wc.end_state_condition == "is_complete == True"
         assert wc.max_loops == 10
         assert wc.finalize_on_abort is False
+        assert wc.name is None
 
     def test_from_dict_all_fields(self):
         from core.engine import WorkflowConfig
@@ -870,6 +895,7 @@ class TestWorkflowConfig:
                 "end_state_condition": "payload.get('x') > 5",
                 "max_loops": 20,
                 "finalize_on_abort": True,
+                "name": "my-wf",
             }
         )
         assert wc.preparation_agents == ["prep"]
@@ -878,6 +904,7 @@ class TestWorkflowConfig:
         assert wc.end_state_condition == "payload.get('x') > 5"
         assert wc.max_loops == 20
         assert wc.finalize_on_abort is True
+        assert wc.name == "my-wf"
 
     def test_from_dict_empty(self):
         from core.engine import WorkflowConfig
@@ -907,6 +934,7 @@ class TestWorkflowConfig:
         assert d["finalize_on_abort"] is True
         assert d["workdir"] is None
         assert d["init_script"] is None
+        assert d["name"] is None
         assert "opencode_defaults" not in d
 
     def test_load_from_file(self, tmp_path):
@@ -1667,6 +1695,8 @@ class TestWorkflowApp:
         app._workdir_var.get.return_value = ""
         app._init_script_var = MagicMock()
         app._init_script_var.get.return_value = ""
+        app._workflow_name_var = MagicMock()
+        app._workflow_name_var.get.return_value = ""
         app._oc_model_var = MagicMock()
         app._oc_model_var.get.return_value = ""
         app._oc_agent_var = MagicMock()
@@ -1767,9 +1797,11 @@ class TestWorkflowApp:
             app._max_loops_var = MagicMock()
             app._end_condition_var = MagicMock()
             app._finalize_on_abort_var = MagicMock()
+            app._workflow_name_var = MagicMock()
 
             app._load_workflow_into_ui(
                 {
+                    "name": "my-workflow",
                     "preparation_agents": ["prep"],
                     "loop_agents": ["a", "b"],
                     "finalization_agents": ["fin"],
@@ -1787,6 +1819,7 @@ class TestWorkflowApp:
             app._max_loops_var.set.assert_called_with("7")
             app._end_condition_var.set.assert_called_with("x == 1")
             app._finalize_on_abort_var.set.assert_called_with(True)
+            app._workflow_name_var.set.assert_called_with("my-workflow")
 
     def test_log_queues_message(self):
         with (

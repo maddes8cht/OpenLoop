@@ -98,6 +98,17 @@ Your output should allow AMALA to start working immediately.
    - weak assertions
    - known issues documented in test documentation
 
+   **Bug-Hunting Priority (Critical):**
+   When identifying gaps, explicitly prioritize "Bug-Hunting" targets over pure Happy-Path coverage. 
+   Actively look for:
+   - Error paths and exception handling (what happens when things fail?)
+   - Invalid, malformed, or unexpected inputs (boundary values, wrong types, empty data)
+   - Race conditions or state-dependent behavior
+   - Edge cases at the boundaries of data ranges (0, -1, MAX_INT, empty lists)
+   - Defensive code paths that are currently untested
+
+  Your goal is not just to measure coverage, but to find the places in the code where a hidden bug is most likely to reside.
+
 5. Create a focused plan for AMALA.
    - Be specific.
    - Prefer concrete functions, methods, or behaviors.

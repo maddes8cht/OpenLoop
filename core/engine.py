@@ -29,6 +29,7 @@ class WorkflowConfig:
     workdir: Optional[str] = None
     init_script: Optional[str] = None
     opencode_defaults: OpenCodeOptions = field(default_factory=OpenCodeOptions)
+    name: Optional[str] = None
 
     @staticmethod
     def _clean_agent_list(value: object) -> list[str]:
@@ -116,6 +117,7 @@ class WorkflowConfig:
             workdir=cls._clean_optional_str(data.get("workdir")),
             init_script=cls._clean_optional_str(data.get("init_script")),
             opencode_defaults=opencode_opts,
+            name=cls._clean_optional_str(data.get("name")),
         )
 
     def to_dict(self) -> dict:
@@ -128,6 +130,7 @@ class WorkflowConfig:
             "finalize_on_abort": self.finalize_on_abort,
             "workdir": self.workdir,
             "init_script": self.init_script,
+            "name": self.name,
         }
 
         opts_dict = self.opencode_defaults.to_dict()
@@ -235,6 +238,7 @@ class ExecutionEngine:
 
         self._workdir: Optional[str] = None
         self._init_script: Optional[str] = None
+        self._workflow_name: Optional[str] = None
         self._opencode_opts = OpenCodeOptions()
 
         self._missing_state_handler = missing_state_handler
@@ -256,7 +260,12 @@ class ExecutionEngine:
             self._log_dir = log_dir
 
             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-            self._log_path = log_dir / f"openloop-run-{ts}.log"
+            if self._workflow_name:
+                self._log_path = (
+                    log_dir / f"openloop-run-{self._workflow_name}-{ts}.log"
+                )
+            else:
+                self._log_path = log_dir / f"openloop-run-{ts}.log"
 
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log_handle = self._log_path.open("w", encoding="utf-8")
@@ -491,6 +500,7 @@ class ExecutionEngine:
         self._init_run_meta()
 
         self._workdir = workflow.workdir or self.config.workdir
+        self._workflow_name = workflow.name
         self._init_log(self._workdir)
 
         self.log(f"Loaded workflow: {workflow.loop_agents}")
@@ -802,6 +812,16 @@ class ExecutionEngine:
         else:
             completion = "Set is_complete=false."
 
+        format_rules = (
+            "FORMAT RULES:\n"
+            "- The state update MUST be a single strict JSON object inside <state_update> tags.\n"
+            "- Do NOT use Markdown, YAML, bullet-list, or any other format.\n"
+            "- Valid JSON only: no comments, no trailing commas, no unquoted keys.\n"
+            "- Do not wrap the JSON inside Markdown code fences within the <state_update> tags.\n"
+            "- Every key and string value must be double-quoted.\n"
+            "- The <state_update> block must be placed at the very end of your response."
+        )
+
         if attempt <= 1:
             return "\n".join([
                 "STATE UPDATE REQUIRED",
@@ -812,6 +832,8 @@ class ExecutionEngine:
                 "Reply with exactly one <state_update> element containing one strict JSON object, using real values:",
                 "",
                 self.CORRECTION_EXAMPLE,
+                "",
+                format_rules,
                 "",
                 completion,
             ])
@@ -825,6 +847,8 @@ class ExecutionEngine:
             "Reply with exactly one <state_update> element containing one strict JSON object, using real values:",
             "",
             self.CORRECTION_EXAMPLE,
+            "",
+            format_rules,
             "",
             "If completion is not possible, set is_complete=false and describe the blocker briefly in payload.",
             completion,
