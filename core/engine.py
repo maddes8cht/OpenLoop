@@ -291,13 +291,20 @@ class ExecutionEngine:
 
     def _write_banner(self, agent_name: str) -> None:
         run_id = self._get_run_id()
+        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         self._write_log(
             f"{'=' * 70}\n"
-            f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
+            f"  {ts} | "
             f"Agent: {agent_name} | Phase: {self.state.current_phase} | "
             f"Iteration: {self.state.iteration} | Run ID: {run_id}\n"
             f"{'=' * 70}\n\n"
+        )
+        self._write_log(
+            f"##! BEGIN_AGENT_RUN agent={json.dumps(agent_name)} "
+            f"phase={json.dumps(self.state.current_phase)} "
+            f"iteration={self.state.iteration} "
+            f"run_id={json.dumps(run_id)}\n"
         )
 
     # ---- Run metadata ----
@@ -683,6 +690,7 @@ class ExecutionEngine:
                     f"(exit {result.exit_code})"
                 )
                 self.state.termination_reason = f"agent_error:{agent_name}"
+                self._write_log("##! END_AGENT_RUN\n")
                 return False
 
             # State is extracted exclusively from the agent response.
@@ -711,6 +719,7 @@ class ExecutionEngine:
         if state_data is not None:
             self.state.merge(state_data)
             self.log(f"  State updated: {json.dumps(state_data)}")
+            self._write_log("##! END_AGENT_RUN\n")
             return True
 
         self.log(
@@ -722,10 +731,12 @@ class ExecutionEngine:
                 f"  User chose to continue despite missing state update "
                 f"from '{agent_name}'."
             )
+            self._write_log("##! END_AGENT_RUN\n")
             return True
 
         self.state.termination_reason = f"missing_state:{agent_name}"
         self.log("  Workflow aborted due to missing state update.")
+        self._write_log("##! END_AGENT_RUN\n")
         return False
 
     def _build_prompt(self, agent: AgentDefinition) -> str:
