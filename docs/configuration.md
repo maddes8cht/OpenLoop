@@ -32,13 +32,15 @@ The config file supports **JSONC** (JSON with Comments) – both `//` line comme
 ## Fields
 
 | Field | Type | Default | Description |
-|---|---|---|---|
+|---|---|---|---|---|
 | `agents_dir` | string | `"./agents"` | Directory containing agent `.md` files |
 | `workflows_dir` | string | `"./workflows"` | Directory containing workflow `.json` files |
 | `opencode_binary` | string | `"opencode"` | Path or name of the opencode binary |
 | `default_max_loops` | integer | `10` | Default `max_loops` when a workflow does not specify one (must be >= 1) |
 | `workdir` | string / null | `null` | Working directory for the opencode subprocess |
 | `init_script` | string / null | `null` | Script or command to run before each opencode invocation |
+| `log_dir` | string | `".openloop"` | Directory for log files and prompt files. Can be overridden per workflow or via `--log-dir` CLI flag. |
+| `no_log_file` | boolean | `false` | If `true`, disables file logging entirely. |
 | `opencode_defaults` | object | `{}` | Default flags for every `opencode run` invocation (see below) |
 
 ### `opencode_defaults` fields

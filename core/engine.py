@@ -30,6 +30,7 @@ class WorkflowConfig:
     init_script: Optional[str] = None
     opencode_defaults: OpenCodeOptions = field(default_factory=OpenCodeOptions)
     name: Optional[str] = None
+    log_dir: Optional[str] = None
 
     @staticmethod
     def _clean_agent_list(value: object) -> list[str]:
@@ -118,6 +119,7 @@ class WorkflowConfig:
             init_script=cls._clean_optional_str(data.get("init_script")),
             opencode_defaults=opencode_opts,
             name=cls._clean_optional_str(data.get("name")),
+            log_dir=cls._clean_optional_str(data.get("log_dir")),
         )
 
     def to_dict(self) -> dict:
@@ -131,6 +133,7 @@ class WorkflowConfig:
             "workdir": self.workdir,
             "init_script": self.init_script,
             "name": self.name,
+            "log_dir": self.log_dir,
         }
 
         opts_dict = self.opencode_defaults.to_dict()
@@ -213,6 +216,7 @@ class ExecutionEngine:
         verbose: bool = False,
         no_log_file: bool = False,
         log_file: Optional[str] = None,
+        log_dir: Optional[str] = None,
         timeout: Optional[int] = None,
         missing_state_handler: Optional[MissingStateHandler] = None,
         state_callback: Optional[Callable[[dict], None]] = None,
@@ -237,17 +241,22 @@ class ExecutionEngine:
         self._verbose = verbose
         self._no_log_file = no_log_file
         self._log_file_arg = log_file
+        self._log_dir_arg = log_dir
 
         self._workdir: Optional[str] = None
         self._init_script: Optional[str] = None
         self._workflow_name: Optional[str] = None
+        self._workflow_log_dir: Optional[str] = None
         self._opencode_opts = OpenCodeOptions()
 
         self._missing_state_handler = missing_state_handler
 
     # ---- File logging ----
 
-    def _init_log(self, workdir: Optional[str] = None) -> None:
+    def _init_log(
+        self, workdir: Optional[str] = None,
+        workflow_log_dir: Optional[str] = None,
+    ) -> None:
         if self._no_log_file:
             return
 
@@ -255,7 +264,13 @@ class ExecutionEngine:
             self._log_path = Path(self._log_file_arg)
             self._log_dir = self._log_path.parent
         else:
-            log_dir = Path(self.config.log_dir)
+            # Override chain: CLI --log-dir > workflow log_dir > config log_dir
+            effective = (
+                self._log_dir_arg
+                or workflow_log_dir
+                or self.config.log_dir
+            )
+            log_dir = Path(effective)
             if not log_dir.is_absolute() and workdir:
                 log_dir = Path(workdir) / log_dir
 
@@ -516,7 +531,8 @@ class ExecutionEngine:
 
         self._workdir = workflow.workdir or self.config.workdir
         self._workflow_name = workflow.name
-        self._init_log(self._workdir)
+        self._workflow_log_dir = workflow.log_dir
+        self._init_log(self._workdir, workflow_log_dir=workflow.log_dir)
 
         self.log(f"Loaded workflow: {workflow.loop_agents}")
         self.log(f"Run ID: {self._get_run_id()}")
@@ -678,7 +694,12 @@ class ExecutionEngine:
             if self._log_dir is not None:
                 prompt_file = self._log_dir / self.runner.PROMPT_FILENAME
             else:
-                log_dir = Path(self.config.log_dir)
+                effective = (
+                    self._log_dir_arg
+                    or self._workflow_log_dir
+                    or self.config.log_dir
+                )
+                log_dir = Path(effective)
                 if not log_dir.is_absolute() and self._workdir:
                     log_dir = Path(self._workdir) / log_dir
                 prompt_file = log_dir / self.runner.PROMPT_FILENAME

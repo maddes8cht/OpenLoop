@@ -1705,6 +1705,10 @@ class TestWorkflowApp:
         app._oc_variant_var.get.return_value = ""
         app._oc_pure_var = MagicMock()
         app._oc_pure_var.get.return_value = False
+        app._log_dir_var = MagicMock()
+        app._log_dir_var.get.return_value = ""
+        app._no_log_file_var = MagicMock()
+        app._no_log_file_var.get.return_value = False
 
     def test_get_workflow_data(self):
         with (
