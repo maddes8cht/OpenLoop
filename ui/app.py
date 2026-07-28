@@ -264,16 +264,16 @@ class WorkflowApp:
         self._status_term = Label(toolbar, text="")
         self._status_term.pack(side=LEFT, padx=(0, 8))
 
-        self._clear_log_btn = Button(
-            toolbar, text="Clear", width=5, command=self._clear_log,
-        )
-        self._clear_log_btn.pack(side=LEFT, padx=1)
-
         self._log_collapsed = BooleanVar(value=False)
         self._log_toggle_btn = Button(
             toolbar, text="Log ▲", width=6, command=self._toggle_log
         )
         self._log_toggle_btn.pack(side=LEFT, padx=2)
+
+        self._clear_log_btn = Button(
+            toolbar, text="Clear", width=5, command=self._clear_log,
+        )
+        self._clear_log_btn.pack(side=LEFT, padx=1)
 
         # ---- Main area: 4 columns + Log ----
         self._root_paned = ttk.PanedWindow(self._root, orient=VERTICAL)
@@ -1289,12 +1289,14 @@ class WorkflowApp:
             self._preview_collapsible._toggle()
 
     def _apply_layout(self, layout: str, fullscreen: bool) -> None:
-        if layout in ("preview", "output"):
+        if layout in ("preview", "output", "state"):
             self._root.geometry("1280x720")
             if self._preview_collapsible.is_collapsed:
                 self._preview_collapsible._expand()
             if layout == "output":
                 self._output_notebook.select(1)
+            elif layout == "state":
+                self._output_notebook.select(2)
         if fullscreen:
             self._root.state("zoomed")
 
