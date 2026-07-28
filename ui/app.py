@@ -1090,6 +1090,12 @@ class WorkflowApp:
             messagebox.showerror("Error", f"Missing core module: {exc}")
             return
 
+        # Auto-clear execution log and state display for a fresh start
+        self._log_text.configure(state="normal")
+        self._log_text.delete("1.0", END)
+        self._log_text.configure(state="disabled")
+        self._reset_state_display()
+
         self._running = True
         self._start_btn.configure(state="disabled")
         self._stop_btn.configure(state="normal")
