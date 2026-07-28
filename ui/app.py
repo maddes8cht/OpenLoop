@@ -603,7 +603,7 @@ class WorkflowApp:
         )
 
         # Section header for payload
-        Label(state_tab, text="Payload (JSON):", anchor=W, font=("", 9, "bold")).grid(
+        Label(state_tab, text="Payload (JSON):", anchor=W).grid(
             row=1, column=0, sticky=W, padx=2, pady=(4, 0),
         )
 
