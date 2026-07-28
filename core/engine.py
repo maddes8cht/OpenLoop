@@ -3,7 +3,7 @@ import sys
 import threading
 import uuid
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -215,10 +215,12 @@ class ExecutionEngine:
         log_file: Optional[str] = None,
         timeout: Optional[int] = None,
         missing_state_handler: Optional[MissingStateHandler] = None,
+        state_callback: Optional[Callable[[dict], None]] = None,
     ):
         self.config = config or Config()
         self.logger = logger or (lambda msg: print(f"[OpenLoop] {msg}"))
         self.state = WorkflowState()
+        self._state_callback = state_callback
         self.agent_loader = AgentLoader(self.config.agents_dir)
 
         self._timeout = timeout if timeout is not None else self.config.default_timeout
@@ -341,6 +343,12 @@ class ExecutionEngine:
             return str(openloop_meta.get("run_id", ""))
 
         return ""
+
+    # ---- State callback ----
+
+    def _notify_state(self) -> None:
+        if self._state_callback:
+            self._state_callback(asdict(self.state))
 
     # ---- Missing state policy ----
 
@@ -554,6 +562,7 @@ class ExecutionEngine:
             return True
 
         self.state.current_phase = "preparation"
+        self._notify_state()
 
         for agent_name in workflow.preparation_agents:
             self.log(f"Preparation phase: {agent_name}")
@@ -563,6 +572,7 @@ class ExecutionEngine:
 
             if self._stop_event.is_set():
                 self.state.termination_reason = "stopped"
+                self._notify_state()
                 self.log("Execution stopped by user")
                 return False
 
@@ -576,14 +586,17 @@ class ExecutionEngine:
             return True
 
         self.state.current_phase = "loop"
+        self._notify_state()
 
         while self.state.iteration < workflow.max_loops:
             if self._stop_event.is_set():
                 self.state.termination_reason = "stopped"
+                self._notify_state()
                 self.log("Execution stopped by user")
                 return False
 
             self.state.iteration += 1
+            self._notify_state()
             self.log(
                 f"Loop iteration {self.state.iteration}/{workflow.max_loops}"
             )
@@ -596,6 +609,7 @@ class ExecutionEngine:
 
                 if self._stop_event.is_set():
                     self.state.termination_reason = "stopped"
+                    self._notify_state()
                     self.log("Execution stopped by user")
                     return False
 
@@ -605,9 +619,11 @@ class ExecutionEngine:
                         f"(iteration {self.state.iteration})"
                     )
                     self.state.termination_reason = "completed"
+                    self._notify_state()
                     return True
 
         self.state.termination_reason = "max_loops_reached"
+        self._notify_state()
         self.log(
             f"Max loops ({workflow.max_loops}) reached — terminating loop"
         )
@@ -631,6 +647,7 @@ class ExecutionEngine:
             return True
 
         self.state.current_phase = "finalization"
+        self._notify_state()
 
         for agent_name in workflow.finalization_agents:
             self.log(f"Finalization phase: {agent_name}")
@@ -640,6 +657,7 @@ class ExecutionEngine:
 
             if self._stop_event.is_set():
                 self.state.termination_reason = "stopped"
+                self._notify_state()
                 self.log("Execution stopped by user")
                 return False
 
@@ -690,6 +708,7 @@ class ExecutionEngine:
                     f"(exit {result.exit_code})"
                 )
                 self.state.termination_reason = f"agent_error:{agent_name}"
+                self._notify_state()
                 self._write_log("##! END_AGENT_RUN\n")
                 return False
 
@@ -718,6 +737,7 @@ class ExecutionEngine:
 
         if state_data is not None:
             self.state.merge(state_data)
+            self._notify_state()
             self.log(f"  State updated: {json.dumps(state_data)}")
             self._write_log("##! END_AGENT_RUN\n")
             return True
@@ -735,6 +755,7 @@ class ExecutionEngine:
             return True
 
         self.state.termination_reason = f"missing_state:{agent_name}"
+        self._notify_state()
         self.log("  Workflow aborted due to missing state update.")
         self._write_log("##! END_AGENT_RUN\n")
         return False

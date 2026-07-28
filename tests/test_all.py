@@ -1851,6 +1851,7 @@ class TestWorkflowApp:
             app = WorkflowApp()
             app._start_btn = MagicMock()
             app._stop_btn = MagicMock()
+            app._status_dot = MagicMock()
             app._execution_done()
             assert app._running is False
             app._start_btn.configure.assert_called_with(state="normal")
