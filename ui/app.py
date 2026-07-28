@@ -584,7 +584,7 @@ class WorkflowApp:
         # Tab 3: State (live state display for #33)
         state_tab = Frame(self._output_notebook)
         state_tab.columnconfigure(0, weight=1)
-        state_tab.rowconfigure(1, weight=1)
+        state_tab.rowconfigure(2, weight=1)
         self._output_notebook.add(state_tab, text="State")
 
         # Top: key-value summary
@@ -602,12 +602,17 @@ class WorkflowApp:
             row=0, column=0, sticky=(S, E), padx=2, pady=(0, 0),
         )
 
+        # Section header for payload
+        Label(state_tab, text="Payload (JSON):", anchor=W, font=("", 9, "bold")).grid(
+            row=1, column=0, sticky=W, padx=2, pady=(4, 0),
+        )
+
         # Bottom: payload JSON (full, scrollable, fills remaining space)
         self._state_payload_text = Text(
             state_tab, wrap="none", state="disabled",
         )
         self._state_payload_text.grid(
-            row=1, column=0, sticky=(N, S, W, E), padx=2, pady=(0, 2),
+            row=2, column=0, sticky=(N, S, W, E), padx=2, pady=(0, 2),
         )
         state_payload_scroll = Scrollbar(
             state_tab, command=self._state_payload_text.yview
@@ -615,7 +620,7 @@ class WorkflowApp:
         self._state_payload_text.configure(
             yscrollcommand=state_payload_scroll.set
         )
-        state_payload_scroll.grid(row=1, column=1, sticky=(N, S))
+        state_payload_scroll.grid(row=2, column=1, sticky=(N, S))
 
         self._reset_state_display()
 
