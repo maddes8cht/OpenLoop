@@ -270,6 +270,11 @@ class WorkflowApp:
         )
         self._log_toggle_btn.pack(side=LEFT, padx=2)
 
+        self._clear_log_btn = Button(
+            toolbar, text="Clear", width=5, command=self._clear_log,
+        )
+        self._clear_log_btn.pack(side=LEFT, padx=1)
+
         # ---- Main area: 4 columns + Log ----
         self._root_paned = ttk.PanedWindow(self._root, orient=VERTICAL)
         self._root_paned.grid(
@@ -597,25 +602,12 @@ class WorkflowApp:
             row=0, column=0, sticky=(S, E), padx=2, pady=(0, 0),
         )
 
-        # Bottom: payload JSON with expand toggle
-        payload_header = Frame(state_tab)
-        payload_header.grid(
-            row=1, column=0, sticky=(W, E), padx=2, pady=(4, 0),
+        # Section header for payload
+        Label(state_tab, text="Payload (JSON):", anchor=W).grid(
+            row=1, column=0, sticky=W, padx=2, pady=(4, 0),
         )
-        payload_header.columnconfigure(0, weight=1)
 
-        Label(payload_header, text="Payload (JSON):", anchor=W).pack(
-            side=LEFT,
-        )
-        self._state_payload_full = BooleanVar(value=False)
-        self._state_payload_btn = Button(
-            payload_header,
-            text="Show full",
-            width=9,
-            command=self._toggle_state_payload,
-        )
-        self._state_payload_btn.pack(side=RIGHT, padx=2)
-
+        # Bottom: payload JSON (full, scrollable, fills remaining space)
         self._state_payload_text = Text(
             state_tab, wrap="none", state="disabled",
         )
@@ -629,18 +621,6 @@ class WorkflowApp:
             yscrollcommand=state_payload_scroll.set
         )
         state_payload_scroll.grid(row=2, column=1, sticky=(N, S))
-
-        # Auto-scroll toggle
-        state_controls = Frame(state_tab)
-        state_controls.grid(
-            row=3, column=0, columnspan=2, sticky=W, padx=2, pady=(0, 2),
-        )
-        self._state_autoscroll_var = BooleanVar(value=True)
-        Checkbutton(
-            state_controls,
-            text="Auto-scroll",
-            variable=self._state_autoscroll_var,
-        ).pack(side=LEFT)
 
         self._reset_state_display()
 
@@ -1176,7 +1156,6 @@ class WorkflowApp:
             self._status_dot.configure(fg="green")
 
     def _update_state_tab(self, state: dict) -> None:
-        self._last_state = state
         lines = []
         for key in ("current_phase", "iteration", "is_complete", "termination_reason"):
             val = state.get(key, "")
@@ -1186,35 +1165,17 @@ class WorkflowApp:
         max_iter = self._current_max_loops if iteration > 0 else "—"
         lines[1] = f"  {'iteration':<20}  {iteration} / {max_iter}"
 
-        self._render_payload(state.get("payload", {}))
-
         self._state_kv_text.configure(state="normal")
         self._state_kv_text.delete("1.0", END)
         self._state_kv_text.insert("1.0", "\n".join(lines))
         self._state_kv_text.configure(state="disabled")
 
-    def _render_payload(self, payload: dict) -> None:
-        payload_str = json.dumps(payload, indent=2)
-        full = self._state_payload_full.get()
-        displayed = payload_str if full else (
-            payload_str[:1000] + "\n\n  (... truncated, click 'Show full')"
-            if len(payload_str) > 1000 else payload_str
-        )
-
+        payload_str = json.dumps(state.get("payload", {}), indent=2)
         self._state_payload_text.configure(state="normal")
         self._state_payload_text.delete("1.0", END)
-        self._state_payload_text.insert("1.0", displayed)
+        self._state_payload_text.insert("1.0", payload_str)
         self._state_payload_text.configure(state="disabled")
-
-        if self._state_autoscroll_var.get():
-            self._state_payload_text.see("1.0")
-
-    def _toggle_state_payload(self) -> None:
-        self._state_payload_full.set(not self._state_payload_full.get())
-        label = "Show less" if self._state_payload_full.get() else "Show full"
-        self._state_payload_btn.configure(text=label)
-        if hasattr(self, "_last_state") and self._last_state:
-            self._render_payload(self._last_state.get("payload", {}))
+        self._state_payload_text.see("1.0")
 
     def _reset_state_display(self) -> None:
         self._status_phase.configure(text="Phase: idle", fg="gray")
@@ -1228,7 +1189,6 @@ class WorkflowApp:
         self._state_kv_text.insert("1.0", "  (No state data yet)")
         self._state_kv_text.configure(state="disabled")
 
-        self._state_payload_full.set(False)
         self._state_payload_text.configure(state="normal")
         self._state_payload_text.delete("1.0", END)
         self._state_payload_text.configure(state="disabled")
@@ -1258,6 +1218,12 @@ class WorkflowApp:
 
         self._root.after(100, self._poll_log_queue)
 
+    def _clear_log(self) -> None:
+        self._log_text.configure(state="normal")
+        self._log_text.delete("1.0", END)
+        self._log_text.configure(state="disabled")
+        self._reset_state_display()
+
     def _toggle_log(self) -> None:
         if self._log_collapsed.get():
             self._log_collapsed.set(False)
@@ -1278,12 +1244,14 @@ class WorkflowApp:
             self._preview_collapsible._toggle()
 
     def _apply_layout(self, layout: str, fullscreen: bool) -> None:
-        if layout in ("preview", "output"):
+        if layout in ("preview", "output", "state"):
             self._root.geometry("1280x720")
             if self._preview_collapsible.is_collapsed:
                 self._preview_collapsible._expand()
             if layout == "output":
                 self._output_notebook.select(1)
+            elif layout == "state":
+                self._output_notebook.select(2)
         if fullscreen:
             self._root.state("zoomed")
 

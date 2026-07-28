@@ -53,7 +53,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--layout",
-        choices=["default", "preview", "output"],
+        choices=["default", "preview", "output", "state"],
         default="default",
         help="GUI layout preset (default: %(default)s)",
     )
