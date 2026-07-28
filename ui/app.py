@@ -7,6 +7,7 @@ from tkinter import (
     END,
     LEFT,
     N,
+    RIGHT,
     S,
     W,
     E,
@@ -176,6 +177,7 @@ class WorkflowApp:
         self._execution_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._running = False
+        self._current_max_loops: int = 10
         self._log_queue: queue.Queue = queue.Queue()
         self._opencode_defaults_raw = opencode_defaults_raw
         self._cli_no_log_file = no_log_file
@@ -245,6 +247,22 @@ class WorkflowApp:
             state="disabled",
         )
         self._stop_btn.pack(side=LEFT, padx=2)
+
+        # Status bar labels (inline in toolbar)
+        self._status_dot = Label(toolbar, text="●", fg="gray")
+        self._status_dot.pack(side=LEFT, padx=(8, 2))
+
+        self._status_phase = Label(toolbar, text="Phase: idle")
+        self._status_phase.pack(side=LEFT, padx=(0, 8))
+
+        self._status_iter = Label(toolbar, text="Iter: —")
+        self._status_iter.pack(side=LEFT, padx=(0, 8))
+
+        self._status_complete = Label(toolbar, text="")
+        self._status_complete.pack(side=LEFT, padx=(0, 8))
+
+        self._status_term = Label(toolbar, text="")
+        self._status_term.pack(side=LEFT, padx=(0, 8))
 
         self._log_collapsed = BooleanVar(value=False)
         self._log_toggle_btn = Button(
@@ -558,6 +576,74 @@ class WorkflowApp:
         )
         self._output_text.configure(state="disabled")
 
+        # Tab 3: State (live state display for #33)
+        state_tab = Frame(self._output_notebook)
+        state_tab.columnconfigure(0, weight=1)
+        state_tab.rowconfigure(2, weight=1)
+        self._output_notebook.add(state_tab, text="State")
+
+        # Top: key-value summary
+        self._state_kv_text = Text(
+            state_tab, wrap="none", state="disabled", height=6
+        )
+        self._state_kv_text.grid(
+            row=0, column=0, sticky=(N, S, W, E), padx=2, pady=(2, 0),
+        )
+        state_kv_scroll = Scrollbar(
+            state_tab, orient=HORIZONTAL, command=self._state_kv_text.xview
+        )
+        self._state_kv_text.configure(xscrollcommand=state_kv_scroll.set)
+        state_kv_scroll.grid(
+            row=0, column=0, sticky=(S, E), padx=2, pady=(0, 0),
+        )
+
+        # Bottom: payload JSON with expand toggle
+        payload_header = Frame(state_tab)
+        payload_header.grid(
+            row=1, column=0, sticky=(W, E), padx=2, pady=(4, 0),
+        )
+        payload_header.columnconfigure(0, weight=1)
+
+        Label(payload_header, text="Payload (JSON):", anchor=W).pack(
+            side=LEFT,
+        )
+        self._state_payload_full = BooleanVar(value=False)
+        self._state_payload_btn = Button(
+            payload_header,
+            text="Show full",
+            width=9,
+            command=self._toggle_state_payload,
+        )
+        self._state_payload_btn.pack(side=RIGHT, padx=2)
+
+        self._state_payload_text = Text(
+            state_tab, wrap="none", state="disabled",
+        )
+        self._state_payload_text.grid(
+            row=2, column=0, sticky=(N, S, W, E), padx=2, pady=(0, 2),
+        )
+        state_payload_scroll = Scrollbar(
+            state_tab, command=self._state_payload_text.yview
+        )
+        self._state_payload_text.configure(
+            yscrollcommand=state_payload_scroll.set
+        )
+        state_payload_scroll.grid(row=2, column=1, sticky=(N, S))
+
+        # Auto-scroll toggle
+        state_controls = Frame(state_tab)
+        state_controls.grid(
+            row=3, column=0, columnspan=2, sticky=W, padx=2, pady=(0, 2),
+        )
+        self._state_autoscroll_var = BooleanVar(value=True)
+        Checkbutton(
+            state_controls,
+            text="Auto-scroll",
+            variable=self._state_autoscroll_var,
+        ).pack(side=LEFT)
+
+        self._reset_state_display()
+
         self._root_paned.add(columns_frame, weight=3)
 
         # ---- Bottom: Execution Log ----
@@ -568,7 +654,7 @@ class WorkflowApp:
         self._log_frame.columnconfigure(0, weight=1)
 
         self._log_text = Text(
-            self._log_frame, height=10, wrap="word", state="disabled"
+            self._log_frame, height=8, wrap="word", state="disabled"
         )
         log_scroll = Scrollbar(
             self._log_frame, command=self._log_text.yview
@@ -992,15 +1078,23 @@ class WorkflowApp:
             gui_timeout = int(raw_timeout) if raw_timeout else None
             timeout = self._cli_timeout if self._cli_timeout is not None else gui_timeout
             self._stop_event.clear()
+            self._current_max_loops = int(data.get("max_loops", 10))
             self._engine = ExecutionEngine(
                 config=cfg, logger=self._log, stop_event=self._stop_event,
                 no_log_file=no_log, log_file=self._cli_log_file,
                 log_dir=self._cli_log_dir,
                 timeout=timeout,
+                state_callback=lambda s: self._log_queue.put(("state", s)),
             )
         except ImportError as exc:
             messagebox.showerror("Error", f"Missing core module: {exc}")
             return
+
+        # Auto-clear execution log and state display for a fresh start
+        self._log_text.configure(state="normal")
+        self._log_text.delete("1.0", END)
+        self._log_text.configure(state="disabled")
+        self._reset_state_display()
 
         self._running = True
         self._start_btn.configure(state="disabled")
@@ -1041,6 +1135,103 @@ class WorkflowApp:
         self._running = False
         self._start_btn.configure(state="normal")
         self._stop_btn.configure(state="disabled")
+        # Show final state in the status dot as idle
+        self._status_dot.configure(fg="gray")
+
+    # ---- State Display (Live) ----
+
+    def _update_status_bar(self, state: dict) -> None:
+        phase = state.get("current_phase", "idle")
+        iteration = state.get("iteration", 0)
+        is_complete = state.get("is_complete", False)
+        term_reason = state.get("termination_reason", "")
+
+        phase_colors = {
+            "preparation": "blue",
+            "loop": "#228B22",
+            "finalization": "darkorange",
+        }
+        phase_color = phase_colors.get(phase, "gray")
+        self._status_phase.configure(
+            text=f"Phase: {phase}", fg=phase_color,
+        )
+
+        if iteration > 0:
+            self._status_iter.configure(
+                text=f"Iter: {iteration}/{self._current_max_loops}",
+            )
+        else:
+            self._status_iter.configure(text="Iter: —")
+
+        if is_complete:
+            self._status_complete.configure(text="✓", fg="green")
+        else:
+            self._status_complete.configure(text="✗", fg="gray")
+
+        if term_reason:
+            self._status_term.configure(text=term_reason, fg="#333")
+            self._status_dot.configure(fg="red" if "error" in term_reason or "missing" in term_reason else "#333")
+        else:
+            self._status_term.configure(text="")
+            self._status_dot.configure(fg="green")
+
+    def _update_state_tab(self, state: dict) -> None:
+        self._last_state = state
+        lines = []
+        for key in ("current_phase", "iteration", "is_complete", "termination_reason"):
+            val = state.get(key, "")
+            lines.append(f"  {key:<20}  {val}")
+
+        iteration = state.get("iteration", 0)
+        max_iter = self._current_max_loops if iteration > 0 else "—"
+        lines[1] = f"  {'iteration':<20}  {iteration} / {max_iter}"
+
+        self._render_payload(state.get("payload", {}))
+
+        self._state_kv_text.configure(state="normal")
+        self._state_kv_text.delete("1.0", END)
+        self._state_kv_text.insert("1.0", "\n".join(lines))
+        self._state_kv_text.configure(state="disabled")
+
+    def _render_payload(self, payload: dict) -> None:
+        payload_str = json.dumps(payload, indent=2)
+        full = self._state_payload_full.get()
+        displayed = payload_str if full else (
+            payload_str[:1000] + "\n\n  (... truncated, click 'Show full')"
+            if len(payload_str) > 1000 else payload_str
+        )
+
+        self._state_payload_text.configure(state="normal")
+        self._state_payload_text.delete("1.0", END)
+        self._state_payload_text.insert("1.0", displayed)
+        self._state_payload_text.configure(state="disabled")
+
+        if self._state_autoscroll_var.get():
+            self._state_payload_text.see("1.0")
+
+    def _toggle_state_payload(self) -> None:
+        self._state_payload_full.set(not self._state_payload_full.get())
+        label = "Show less" if self._state_payload_full.get() else "Show full"
+        self._state_payload_btn.configure(text=label)
+        if hasattr(self, "_last_state") and self._last_state:
+            self._render_payload(self._last_state.get("payload", {}))
+
+    def _reset_state_display(self) -> None:
+        self._status_phase.configure(text="Phase: idle", fg="gray")
+        self._status_iter.configure(text="Iter: —")
+        self._status_complete.configure(text="")
+        self._status_term.configure(text="")
+        self._status_dot.configure(fg="gray")
+
+        self._state_kv_text.configure(state="normal")
+        self._state_kv_text.delete("1.0", END)
+        self._state_kv_text.insert("1.0", "  (No state data yet)")
+        self._state_kv_text.configure(state="disabled")
+
+        self._state_payload_full.set(False)
+        self._state_payload_text.configure(state="normal")
+        self._state_payload_text.delete("1.0", END)
+        self._state_payload_text.configure(state="disabled")
 
     # ---- Logging ----
 
@@ -1061,6 +1252,9 @@ class WorkflowApp:
                 self._log_text.insert(END, data + "\n")
                 self._log_text.see(END)
                 self._log_text.configure(state="disabled")
+            elif kind == "state":
+                self._update_status_bar(data)
+                self._update_state_tab(data)
 
         self._root.after(100, self._poll_log_queue)
 
