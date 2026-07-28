@@ -654,7 +654,7 @@ class WorkflowApp:
         self._log_frame.columnconfigure(0, weight=1)
 
         self._log_text = Text(
-            self._log_frame, height=10, wrap="word", state="disabled"
+            self._log_frame, height=8, wrap="word", state="disabled"
         )
         log_scroll = Scrollbar(
             self._log_frame, command=self._log_text.yview
