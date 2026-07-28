@@ -896,6 +896,7 @@ class TestWorkflowConfig:
                 "max_loops": 20,
                 "finalize_on_abort": True,
                 "name": "my-wf",
+                "log_dir": "./logs/my-project",
             }
         )
         assert wc.preparation_agents == ["prep"]
@@ -905,6 +906,7 @@ class TestWorkflowConfig:
         assert wc.max_loops == 20
         assert wc.finalize_on_abort is True
         assert wc.name == "my-wf"
+        assert wc.log_dir == "./logs/my-project"
 
     def test_from_dict_empty(self):
         from core.engine import WorkflowConfig
@@ -935,7 +937,18 @@ class TestWorkflowConfig:
         assert d["workdir"] is None
         assert d["init_script"] is None
         assert d["name"] is None
+        assert d["log_dir"] is None
         assert "opencode_defaults" not in d
+
+    def test_to_dict_with_log_dir(self):
+        from core.engine import WorkflowConfig
+
+        wc = WorkflowConfig(
+            loop_agents=["a"],
+            log_dir="./custom-logs",
+        )
+        d = wc.to_dict()
+        assert d["log_dir"] == "./custom-logs"
 
     def test_load_from_file(self, tmp_path):
         from core.engine import WorkflowConfig
@@ -1458,6 +1471,80 @@ class TestExecutionEngine:
         passed_opts = calls[0]
         assert passed_opts.model == "claude"
         assert passed_opts.agent == "build"
+
+    def test_log_dir_uses_config_default(self, tmp_path):
+        from pathlib import Path
+        from core.engine import ExecutionEngine
+        from core.runner import OpenCodeOptions
+
+        engine = ExecutionEngine()
+        engine.runner = self._make_mock_runner()
+        engine.agent_loader = self._make_mock_agent_loader({"a": "Agent"})
+        expected = tmp_path / "config-logs"
+        engine.config = type("C", (), {
+            "opencode_defaults": OpenCodeOptions(),
+            "workdir": None,
+            "init_script": None,
+            "log_dir": str(expected),
+            "no_log_file": False,
+        })()
+        engine.execute_workflow_data({
+            "loop_agents": ["a"],
+            "max_loops": 1,
+            "end_state_condition": "is_complete == True",
+        })
+        assert engine._log_dir == expected
+
+    def test_log_dir_workflow_overrides_config(self, tmp_path):
+        from pathlib import Path
+        from core.engine import ExecutionEngine
+        from core.runner import OpenCodeOptions
+
+        engine = ExecutionEngine()
+        engine.runner = self._make_mock_runner()
+        engine.agent_loader = self._make_mock_agent_loader({"a": "Agent"})
+        config_dir = tmp_path / "config-logs"
+        wf_dir = tmp_path / "wf-logs"
+        engine.config = type("C", (), {
+            "opencode_defaults": OpenCodeOptions(),
+            "workdir": None,
+            "init_script": None,
+            "log_dir": str(config_dir),
+            "no_log_file": False,
+        })()
+        engine.execute_workflow_data({
+            "loop_agents": ["a"],
+            "max_loops": 1,
+            "end_state_condition": "is_complete == True",
+            "log_dir": str(wf_dir),
+        })
+        assert engine._log_dir == wf_dir
+
+    def test_log_dir_cli_overrides_all(self, tmp_path):
+        from pathlib import Path
+        from core.engine import ExecutionEngine
+        from core.runner import OpenCodeOptions
+
+        config_dir = tmp_path / "config-logs"
+        wf_dir = tmp_path / "wf-logs"
+        cli_dir = tmp_path / "cli-logs"
+        engine = ExecutionEngine(log_dir=str(cli_dir))
+        engine.runner = self._make_mock_runner()
+        engine.agent_loader = self._make_mock_agent_loader({"a": "Agent"})
+        engine.config = type("C", (), {
+            "opencode_defaults": OpenCodeOptions(),
+            "workdir": None,
+            "init_script": None,
+            "log_dir": str(config_dir),
+            "no_log_file": False,
+        })()
+        engine.execute_workflow_data({
+            "loop_agents": ["a"],
+            "max_loops": 1,
+            "end_state_condition": "is_complete == True",
+            "log_dir": str(wf_dir),
+        })
+        assert engine._log_dir == cli_dir
 
     # -- helpers --
 
