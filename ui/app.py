@@ -264,6 +264,11 @@ class WorkflowApp:
         self._status_term = Label(toolbar, text="")
         self._status_term.pack(side=LEFT, padx=(0, 8))
 
+        self._clear_log_btn = Button(
+            toolbar, text="Clear", width=5, command=self._clear_log,
+        )
+        self._clear_log_btn.pack(side=LEFT, padx=1)
+
         self._log_collapsed = BooleanVar(value=False)
         self._log_toggle_btn = Button(
             toolbar, text="Log ▲", width=6, command=self._toggle_log
@@ -1257,6 +1262,12 @@ class WorkflowApp:
                 self._update_state_tab(data)
 
         self._root.after(100, self._poll_log_queue)
+
+    def _clear_log(self) -> None:
+        self._log_text.configure(state="normal")
+        self._log_text.delete("1.0", END)
+        self._log_text.configure(state="disabled")
+        self._reset_state_display()
 
     def _toggle_log(self) -> None:
         if self._log_collapsed.get():
