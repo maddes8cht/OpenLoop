@@ -161,6 +161,7 @@ class WorkflowApp:
         layout: str = "default",
         no_log_file: bool = False,
         log_file: Optional[str] = None,
+        log_dir: Optional[str] = None,
         timeout: Optional[int] = None,
     ) -> None:
         self._root = Tk()
@@ -179,6 +180,7 @@ class WorkflowApp:
         self._opencode_defaults_raw = opencode_defaults_raw
         self._cli_no_log_file = no_log_file
         self._cli_log_file = log_file
+        self._cli_log_dir = log_dir
         self._cli_timeout = timeout
 
         self._build_ui()
@@ -194,6 +196,9 @@ class WorkflowApp:
             self._workdir_var.set(str(Path(workdir).resolve()))
         if init_script:
             self._init_script_var.set(init_script)
+        if log_dir:
+            self._log_dir_var.set(log_dir)
+            self._update_log_status()
         self._update_title()
 
     # ---- Public API ----
@@ -740,6 +745,10 @@ class WorkflowApp:
         if wname:
             data["name"] = wname
 
+        log_dir = self._log_dir_var.get().strip()
+        if log_dir:
+            data["log_dir"] = log_dir
+
         return data
 
     def _load_workflow_into_ui(self, data: dict) -> None:
@@ -785,6 +794,10 @@ class WorkflowApp:
             self._init_script_var.set(data["init_script"] or "")
 
         self._workflow_name_var.set(str(data.get("name", "") or ""))
+
+        if "log_dir" in data and data["log_dir"]:
+            self._log_dir_var.set(str(data["log_dir"]))
+            self._update_log_status()
 
         oc_defaults = data.get("opencode_defaults", {})
         if isinstance(oc_defaults, dict):
@@ -982,6 +995,7 @@ class WorkflowApp:
             self._engine = ExecutionEngine(
                 config=cfg, logger=self._log, stop_event=self._stop_event,
                 no_log_file=no_log, log_file=self._cli_log_file,
+                log_dir=self._cli_log_dir,
                 timeout=timeout,
             )
         except ImportError as exc:

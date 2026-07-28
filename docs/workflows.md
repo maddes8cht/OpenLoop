@@ -21,8 +21,9 @@ Workflow definitions are JSON files stored in `workflows/` (configurable via `wo
 ## Fields
 
 | Field | Type | Default | Description |
-|---|---|---|---|---|
+|---|---|---|---|---|---|
 | `name` | string / null | `null` | Optional workflow name. When set, log files are named `openloop-run-{name}-{timestamp}.log` instead of `openloop-run-{timestamp}.log`. Set in the GUI via Settings > Environment > Name. |
+| `log_dir` | string / null | `null` | Override the log directory for this workflow. If relative, resolved against the effective `workdir`. Falls back to `openloop.json` `log_dir`. |
 | `preparation_agents` | string / array of strings | `[]` | Agent(s) run once before the loop. Accepts single string or list. Also accepts legacy key `preparation_agent`. |
 | `loop_agents` | array of strings | `[]` | Agent(s) executed in sequence each iteration |
 | `finalization_agents` | string / array of strings | `[]` | Agent(s) run once after the loop. Accepts single string or list. Also accepts legacy key `finalization_agent`. |
@@ -65,6 +66,12 @@ Examples:
 1. CLI flag (`--workdir` / `--init-script`) — highest priority
 2. Workflow JSON field — medium priority
 3. `openloop.json` field — lowest priority
+
+### `log_dir`
+
+1. CLI flag (`--log-dir`) — highest priority
+2. Workflow JSON `log_dir` — medium priority
+3. `openloop.json` `log_dir` — lowest priority
 
 ### `opencode_defaults`
 

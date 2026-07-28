@@ -17,6 +17,7 @@ python openloop.py [OPTIONS]
 | `--opencode-defaults <json>` | JSON string overriding opencode defaults for all agents (e.g., `'{"model":"gpt-4o","agent":"plan"}'`). Merges with config/workflow settings. |
 | `--config <path>` | Path to configuration file (default: `openloop.json` in CWD, falls back to `openloop.json` next to `openloop.py`) |
 | `--verbose`, `-v` | Stream agent stdout/stderr to terminal during execution |
+| `--log-dir <path>` | Log directory (overrides config and workflow `log_dir`) |
 | `--help` | Show help message and exit |
 
 ## Exit Codes

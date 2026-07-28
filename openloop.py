@@ -74,6 +74,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Explicit log file path (auto-generated timestamp name by default)",
     )
     parser.add_argument(
+        "--log-dir",
+        type=str,
+        dest="log_dir",
+        default=None,
+        help="Log directory (overrides config and workflow log_dir)",
+    )
+    parser.add_argument(
         "--timeout",
         type=int,
         default=None,
@@ -117,6 +124,8 @@ def _run_cli(args: argparse.Namespace, config) -> None:
             data["workdir"] = str(Path(args.workdir).resolve())
         if args.init_script:
             data["init_script"] = args.init_script
+        if args.log_dir:
+            data["log_dir"] = args.log_dir
         if args.opencode_defaults:
             try:
                 raw = json_loads(args.opencode_defaults)
@@ -136,6 +145,7 @@ def _run_cli(args: argparse.Namespace, config) -> None:
             verbose=args.verbose,
             no_log_file=args.no_log_file,
             log_file=args.log_file,
+            log_dir=args.log_dir,
             timeout=args.timeout,
         )
         engine.execute_workflow_data(data)
@@ -171,6 +181,7 @@ def _run_gui(args: argparse.Namespace, config) -> None:
         layout=args.layout,
         no_log_file=args.no_log_file,
         log_file=args.log_file,
+        log_dir=args.log_dir,
         timeout=args.timeout,
     )
     try:
