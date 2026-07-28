@@ -579,7 +579,7 @@ class WorkflowApp:
         # Tab 3: State (live state display for #33)
         state_tab = Frame(self._output_notebook)
         state_tab.columnconfigure(0, weight=1)
-        state_tab.rowconfigure(1, weight=1)
+        state_tab.rowconfigure(2, weight=1)
         self._output_notebook.add(state_tab, text="State")
 
         # Top: key-value summary
@@ -1170,6 +1170,7 @@ class WorkflowApp:
             self._status_dot.configure(fg="green")
 
     def _update_state_tab(self, state: dict) -> None:
+        self._last_state = state
         lines = []
         for key in ("current_phase", "iteration", "is_complete", "termination_reason"):
             val = state.get(key, "")
@@ -1179,17 +1180,20 @@ class WorkflowApp:
         max_iter = self._current_max_loops if iteration > 0 else "—"
         lines[1] = f"  {'iteration':<20}  {iteration} / {max_iter}"
 
-        payload = state.get("payload", {})
-        payload_str = json.dumps(payload, indent=2)
+        self._render_payload(state.get("payload", {}))
 
+        self._state_kv_text.configure(state="normal")
+        self._state_kv_text.delete("1.0", END)
+        self._state_kv_text.insert("1.0", "\n".join(lines))
+        self._state_kv_text.configure(state="disabled")
+
+    def _render_payload(self, payload: dict) -> None:
+        payload_str = json.dumps(payload, indent=2)
         full = self._state_payload_full.get()
         displayed = payload_str if full else (
             payload_str[:1000] + "\n\n  (... truncated, click 'Show full')"
             if len(payload_str) > 1000 else payload_str
         )
-
-        max_lines = 12 if full else 6
-        self._state_payload_text.configure(height=max_lines)
 
         self._state_payload_text.configure(state="normal")
         self._state_payload_text.delete("1.0", END)
@@ -1199,15 +1203,12 @@ class WorkflowApp:
         if self._state_autoscroll_var.get():
             self._state_payload_text.see("1.0")
 
-        self._state_kv_text.configure(state="normal")
-        self._state_kv_text.delete("1.0", END)
-        self._state_kv_text.insert("1.0", "\n".join(lines))
-        self._state_kv_text.configure(state="disabled")
-
     def _toggle_state_payload(self) -> None:
         self._state_payload_full.set(not self._state_payload_full.get())
         label = "Show less" if self._state_payload_full.get() else "Show full"
         self._state_payload_btn.configure(text=label)
+        if hasattr(self, "_last_state") and self._last_state:
+            self._render_payload(self._last_state.get("payload", {}))
 
     def _reset_state_display(self) -> None:
         self._status_phase.configure(text="Phase: idle", fg="gray")
