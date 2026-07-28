@@ -263,6 +263,7 @@ class LoopLogApp:
         self.parser: Optional[LogParser] = None
         self.sections: list[Section] = []
         self._path: Optional[Path] = path
+        self._sec_map: dict[str, Section] = {}
 
         self._build_ui()
         self._setup_bindings()
@@ -386,11 +387,7 @@ class LoopLogApp:
 
     def _insert_node(self, parent: str, sec: Section) -> str:
         node_id = self._tree.insert(parent, tk.END, text=sec.label, open=True)
-        self._tree.set(node_id, "section", sec)  # store ref
-        # We store the section object in a dict because ttk.Treeview.set is awkward
-        if not hasattr(self._tree, "_sec_map"):
-            self._tree._sec_map = {}
-        self._tree._sec_map[node_id] = sec
+        self._sec_map[node_id] = sec
         for child in sec.children:
             self._insert_node(node_id, child)
         return node_id
@@ -403,18 +400,14 @@ class LoopLogApp:
         sel = self._tree.selection()
         if not sel:
             return
-        sec_map = getattr(self._tree, "_sec_map", {})
-        sec = sec_map.get(sel[0])
+        sec = self._sec_map.get(sel[0])
         if sec is not None:
             self._display_section(sec)
 
     def _display_section(self, sec: Section) -> None:
         if self.parser is None:
             return
-        if sec.has_children:
-            text = self.parser.get_raw_text(sec.start, sec.end)
-        else:
-            text = self.parser.get_raw_text(sec.start, sec.end)
+        text = self.parser.get_raw_text(sec.start, sec.end)
         self._set_text(text)
 
     def _on_show_all(self) -> None:
@@ -423,7 +416,11 @@ class LoopLogApp:
         if self._show_all.get():
             self._set_text(self.parser.get_full_text(strip_markers=False))
         else:
-            # Restore selection-based display
+            sel = self._tree.selection()
+            if not sel:
+                first = self._tree.get_children()
+                if first:
+                    self._tree.selection_set(first[0])
             self._on_select(None)
 
     def _set_text(self, text: str) -> None:
