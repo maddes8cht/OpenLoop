@@ -291,6 +291,7 @@ class LoopLogApp:
         self._file_label.pack(side=tk.LEFT)
 
         self._show_all = tk.BooleanVar(value=False)
+        ttk.Button(top, text="Refresh", command=self._refresh).pack(side=tk.RIGHT, padx=(0, 8))
         ttk.Checkbutton(
             top, text="Show entire file", variable=self._show_all,
             command=self._on_show_all
@@ -336,6 +337,7 @@ class LoopLogApp:
         self._tree.bind("<<TreeviewSelect>>", self._on_select)
         self.root.bind("<Control-o>", lambda e: self._open_file())
         self.root.bind("<Control-O>", lambda e: self._open_file())
+        self.root.bind("<F5>", lambda e: self._refresh())
 
     # -- File loading --
 
@@ -346,6 +348,10 @@ class LoopLogApp:
         )
         if path:
             self.load_log(Path(path))
+
+    def _refresh(self) -> None:
+        if self._path is not None:
+            self.load_log(self._path)
 
     def load_log(self, path: Path) -> None:
         if not path.is_file():
