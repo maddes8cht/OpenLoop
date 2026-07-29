@@ -158,8 +158,7 @@ class ExecutionEngine:
     CORRECTION_FAILURE_HINTS = {
         "missing": (
             "The previous response contained no usable state block. "
-            "Reconstruct the state from the work already done and output it now. "
-            "Do not redo the original task."
+            "Reconstruct the state from the work already done and output it now."
         ),
         "xml_bad_json": (
             "A <state_update> tag was found, but the JSON inside it was invalid. "
@@ -846,12 +845,10 @@ class ExecutionEngine:
         base_prompt: Optional[str] = None,
     ) -> str:
         if isinstance(agent, AgentDefinition):
-            agent_name = agent.name
             may_complete = self._agent_may_complete(agent)
         else:
-            agent_name = str(agent)
             try:
-                loaded_agent = self.agent_loader.get_agent(agent_name)
+                loaded_agent = self.agent_loader.get_agent(str(agent))
                 may_complete = self._agent_may_complete(loaded_agent)
             except Exception:
                 may_complete = False
@@ -883,7 +880,7 @@ class ExecutionEngine:
             return "\n".join([
                 "STATE UPDATE REQUIRED",
                 "",
-                f"You are '{agent_name}'. {failure}",
+                failure,
                 "No further work is needed in this turn. Return the OpenLoop state now.",
                 "",
                 "Reply with exactly one <state_update> element containing one strict JSON object, using real values:",
@@ -898,7 +895,7 @@ class ExecutionEngine:
         return "\n".join([
             "FINAL STATE UPDATE REQUIRED",
             "",
-            f"You are '{agent_name}'. This is the last automatic correction. {failure}",
+            f"This is the last automatic correction. {failure}",
             "No further work is needed in this turn. Return the OpenLoop state now.",
             "",
             "Reply with exactly one <state_update> element containing one strict JSON object, using real values:",

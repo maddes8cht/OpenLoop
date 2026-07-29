@@ -98,14 +98,16 @@ class OpenCodeRunner:
 
         cmd = [self.binary, "run"]
 
-        if continue_session:
-            cmd += ["-c"]
-
         if opts:
             cmd += opts.to_cli_args()
 
         if continue_session:
-            cmd += [prompt]
+            cmd += ["-c"]
+            if prompt_file is not None:
+                prompt_file.parent.mkdir(parents=True, exist_ok=True)
+                prompt_file.write_text(prompt, encoding="utf-8")
+                cmd += ["--file", str(prompt_file.resolve())]
+            cmd += ["No valid state update found. Follow the instructions in the attached file."]
         else:
             if prompt_file is None:
                 workdir = Path(cwd) if cwd else Path.cwd()
