@@ -704,9 +704,13 @@ class ExecutionEngine:
                     log_dir = Path(self._workdir) / log_dir
                 prompt_file = log_dir / self.runner.PROMPT_FILENAME
 
+            opts = self._opencode_opts
+            if attempt > 0:
+                opts = opts.merge(OpenCodeOptions(pure=True))
+
             result = self.runner.run(
                 prompt,
-                opts=self._opencode_opts,
+                opts=opts,
                 cwd=self._workdir,
                 init_script=self._init_script,
                 continue_session=(attempt > 0),
