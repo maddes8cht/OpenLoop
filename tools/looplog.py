@@ -83,6 +83,13 @@ _STRUCTURAL_LINE_RE = re.compile(
     r"(?:\s+[^>]*)?>\s*$"
 )
 
+# Separator drawn above each preview block (multi-select and filter view).
+_SEPARATOR = "=" * 60
+
+
+def _block_header(sec: Section) -> str:
+    return f"{_SEPARATOR}\n{sec.label}  (lines {sec.start + 1}-{sec.end})\n"
+
 
 class LogParser:
     def __init__(self, path: Path) -> None:
@@ -428,6 +435,7 @@ class LoopLogApp:
         self.sections: list[Section] = []
         self._path: Optional[Path] = path
         self._sec_map: dict[str, Section] = {}
+        self._highlight_after_id: Optional[str] = None
 
         self._build_ui()
         self._setup_bindings()
@@ -470,6 +478,12 @@ class LoopLogApp:
             top, text="Show entire file", variable=self._show_all,
             command=self._on_show_all
         ).pack(side=tk.RIGHT)
+        self._hide_system = tk.BooleanVar(value=False)
+        self._hide_system_check = ttk.Checkbutton(
+            top, text="Hide system tags", variable=self._hide_system,
+            command=self._on_hide_system
+        )
+        self._hide_system_check.pack(side=tk.RIGHT, padx=(8, 0))
 
         # Main paned window
         self._paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
@@ -479,7 +493,7 @@ class LoopLogApp:
         left_frame = ttk.Frame(self._paned)
         self._tree = ttk.Treeview(
             left_frame, columns=(), show="tree",
-            selectmode="browse"
+            selectmode="extended"
         )
         tree_scroll = ttk.Scrollbar(left_frame, orient=tk.VERTICAL, command=self._tree.yview)
         self._tree.configure(yscrollcommand=tree_scroll.set)
@@ -500,6 +514,7 @@ class LoopLogApp:
             yscrollcommand=text_scroll_y.set,
             xscrollcommand=text_scroll_x.set,
         )
+        self._text.tag_configure("highlight", background="#3a3a3a")
         self._text.grid(row=0, column=0, sticky="nsew")
         text_scroll_y.grid(row=0, column=1, sticky="ns")
         text_scroll_x.grid(row=1, column=0, sticky="ew")
@@ -541,19 +556,37 @@ class LoopLogApp:
 
         self._path = path
         self._file_label.config(text=str(path.resolve()))
+        self._hide_system.set(False)
+        self._show_all.set(False)
+        self._update_filter_options()
+        self._rebuild_tree()
+
+    def _update_filter_options(self) -> None:
         # Filters only apply to XML-format logs; disable for legacy logs.
         is_xml = any(sec.kind == "xml" for sec in self.sections)
-        self._filter_var.set("all")
+        values = ["all", "stdout", "stderr", "system", "state_update"]
+        if self._hide_system.get():
+            # With system tags hidden there is no isolated system view.
+            values.remove("system")
+            if self._filter_var.get() == "system":
+                self._filter_var.set("all")
         self._filter_dropdown.configure(
-            state="readonly" if is_xml else "disabled"
+            values=values,
+            state="readonly" if is_xml else "disabled",
         )
+        self._hide_system_check.configure(
+            state="normal" if is_xml else "disabled"
+        )
+
+    def _on_hide_system(self) -> None:
+        self._update_filter_options()
         self._rebuild_tree()
-        self._show_all.set(False)
 
     # -- Tree population --
 
     def _rebuild_tree(self) -> None:
         self._tree.delete(*self._tree.get_children())
+        self._sec_map.clear()
         self._text.config(state=tk.NORMAL)
         self._text.delete("1.0", tk.END)
         self._text.config(state=tk.DISABLED)
@@ -569,10 +602,15 @@ class LoopLogApp:
         if first:
             self._tree.selection_set(first[0])
             self._tree.see(first[0])
-        if self.sections:
+        if self._show_all.get():
+            if self.parser is not None:
+                self._set_text(self.parser.get_full_text(strip_markers=False))
+        elif self.sections:
             self._display_section(self.sections[0])
 
     def _insert_node(self, parent: str, sec: Section) -> str:
+        if self._hide_system.get() and sec.tag == "system":
+            return ""
         node_id = self._tree.insert(parent, tk.END, text=sec.label, open=True)
         self._sec_map[node_id] = sec
         for child in sec.children:
@@ -583,13 +621,39 @@ class LoopLogApp:
 
     def _on_select(self, _event: Optional[tk.Event] = None) -> None:
         if self._show_all.get():
+            self._jump_to_section()
+            return
+        sel = self._tree.selection()
+        if not sel:
+            return
+        secs = [self._sec_map[i] for i in sel if i in self._sec_map]
+        if secs:
+            self._display_sections(secs)
+
+    def _jump_to_section(self) -> None:
+        """Scroll the whole-file view to the selected section and highlight it."""
+        if self.parser is None:
             return
         sel = self._tree.selection()
         if not sel:
             return
         sec = self._sec_map.get(sel[0])
-        if sec is not None:
-            self._display_section(sec)
+        if sec is None:
+            return
+        start = f"{sec.start + 1}.0"
+        end = f"{max(sec.end, sec.start + 1) + 1}.0"
+        self._text.see(start)
+        self._text.tag_remove("highlight", "1.0", tk.END)
+        self._text.tag_add("highlight", start, end)
+        if self._highlight_after_id is not None:
+            self._text.after_cancel(self._highlight_after_id)
+        self._highlight_after_id = self._text.after(
+            1500, self._clear_highlight
+        )
+
+    def _clear_highlight(self) -> None:
+        self._text.tag_remove("highlight", "1.0", tk.END)
+        self._highlight_after_id = None
 
     def _matching_sections(self, tag: str) -> list[Section]:
         """All sections in the document with the given tag."""
@@ -606,6 +670,9 @@ class LoopLogApp:
         return matches
 
     def _display_section(self, sec: Section) -> None:
+        self._display_sections([sec])
+
+    def _display_sections(self, secs: list[Section]) -> None:
         if self.parser is None:
             return
 
@@ -620,13 +687,22 @@ class LoopLogApp:
             parts: list[str] = []
             for m in matches:
                 text = self.parser.get_raw_text(m.start, m.end).strip()
-                header = f"{'=' * 60}\n{m.label}  (lines {m.start + 1}-{m.end})\n"
-                parts.append(header + text)
+                parts.append(_block_header(m) + text)
             self._set_text("\n\n".join(parts))
             return
 
-        text = self.parser.get_raw_text(sec.start, sec.end)
-        self._set_text(text)
+        if len(secs) == 1:
+            text = self.parser.get_raw_text(secs[0].start, secs[0].end)
+            self._set_text(text)
+            return
+
+        # Multi-select: show every selected node's content, separated by a
+        # horizontal ruler labelled with the node's title.
+        parts = []
+        for sec in secs:
+            text = self.parser.get_raw_text(sec.start, sec.end).strip()
+            parts.append(_block_header(sec) + text)
+        self._set_text("\n\n".join(parts))
 
     def _on_filter_change(self, _event: Optional[tk.Event] = None) -> None:
         if self._show_all.get():

@@ -2048,3 +2048,287 @@ class TestWorkflowApp:
             app._stop_execution()
             app._stop_event.set.assert_called_once()
             assert app._running is False
+
+
+# ===========================================================================
+# tools.looplog — Viewer
+# ===========================================================================
+
+
+class TestLoopLogViewer:
+    _XML_LOG = (
+        "<openloop_log>\n"
+        "<iteration number=\"1\" max=\"1\">\n"
+        "<agent name=\"amala\" phase=\"loop\" iteration=\"1\" run_id=\"abc\">\n"
+        "<stdout>\n"
+        "hello from agent\n"
+        "</stdout>\n"
+        "<system>\n"
+        "[OpenLoop]   State updated\n"
+        "</system>\n"
+        "</agent>\n"
+        "</iteration>\n"
+        "</openloop_log>\n"
+    )
+
+    @pytest.fixture()
+    def parser(self, tmp_path):
+        from tools.looplog import LogParser
+
+        log = tmp_path / "test.log"
+        log.write_text(self._XML_LOG, encoding="utf-8")
+        return LogParser(log)
+
+    def _find(self, sections, tag):
+        found = []
+
+        def walk(sec):
+            if sec.tag == tag:
+                found.append(sec)
+            for child in sec.children:
+                walk(child)
+
+        for sec in sections:
+            walk(sec)
+        return found
+
+    # -- Point 1: Multi-Select --
+
+    def test_treeview_uses_extended_selectmode(self):
+        from tools import looplog
+
+        captured = {}
+
+        def fake_treeview(parent, **kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        def fake_widget(*args, **kwargs):
+            return MagicMock()
+
+        with (
+            patch.object(looplog.tk, "Tk", return_value=MagicMock()),
+            patch.object(looplog.ttk, "Treeview", side_effect=fake_treeview),
+            patch.object(looplog.tk, "Menu", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Frame", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Label", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Combobox", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Button", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Checkbutton", side_effect=fake_widget),
+            patch.object(looplog.ttk, "PanedWindow", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Scrollbar", side_effect=fake_widget),
+            patch.object(looplog.tk, "Text", side_effect=fake_widget),
+            patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
+            patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
+        ):
+            app = object.__new__(looplog.LoopLogApp)
+            app.root = looplog.tk.Tk()
+            app._build_ui()
+
+        assert captured.get("selectmode") == "extended"
+
+    def test_block_header_contains_label_and_lines(self, parser):
+        from tools.looplog import _block_header
+
+        iteration = self._find(parser.parse(), "iteration")[0]
+        header = _block_header(iteration)
+        assert "=" * 60 in header
+        assert iteration.label in header
+        assert f"lines {iteration.start + 1}-{iteration.end}" in header
+
+    def test_display_sections_multiselect_shows_headers(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "all"
+        app._set_text = MagicMock()
+
+        agent = self._find(sections, "agent")[0]
+        system = self._find(sections, "system")[0]
+        app._display_sections([agent, system])
+
+        text = app._set_text.call_args[0][0]
+        assert "hello from agent" in text
+        assert "[OpenLoop]   State updated" in text
+        assert agent.label in text
+        assert system.label in text
+        assert text.count("=" * 60) == 2
+
+    def test_display_sections_single_no_header(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "all"
+        app._set_text = MagicMock()
+
+        agent = self._find(sections, "agent")[0]
+        app._display_sections([agent])
+        text = app._set_text.call_args[0][0]
+        assert "hello from agent" in text
+        assert "=" * 60 not in text
+
+    # -- Point 2: Hide System Tags --
+
+    def test_update_filter_options_removes_system_when_hidden(self, parser):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app.sections = parser.parse()
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = True
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "all"
+        app._filter_dropdown = MagicMock()
+        app._hide_system_check = MagicMock()
+
+        app._update_filter_options()
+        values = app._filter_dropdown.configure.call_args.kwargs["values"]
+        assert "system" not in values
+        assert values == ["all", "stdout", "stderr", "state_update"]
+
+    def test_update_filter_options_resets_system_filter(self, parser):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app.sections = parser.parse()
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = True
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "system"
+        app._filter_dropdown = MagicMock()
+        app._hide_system_check = MagicMock()
+
+        app._update_filter_options()
+        app._filter_var.set.assert_called_once_with("all")
+
+    def test_insert_node_skips_system_when_hidden(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = True
+        app._tree = MagicMock()
+        app._tree.insert.return_value = "node"
+        app._sec_map = {}
+
+        root = sections[0]
+        app._insert_node("", root)
+
+        calls = app._tree.insert.call_args_list
+        labels = [c.kwargs["text"] for c in calls]
+        assert "System" not in labels
+        assert "Stdout" in labels
+        assert any(label.startswith("Agent: amala") for label in labels)
+
+    def test_insert_node_includes_system_when_not_hidden(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = False
+        app._tree = MagicMock()
+        app._tree.insert.return_value = "node"
+        app._sec_map = {}
+
+        root = sections[0]
+        app._insert_node("", root)
+
+        calls = app._tree.insert.call_args_list
+        labels = [c.kwargs["text"] for c in calls]
+        assert "System" in labels
+
+    # -- Point 3: Show entire file -> jump + highlight --
+
+    def test_jump_to_section_scrolls_and_highlights(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._tree = MagicMock()
+        app._text = MagicMock()
+        app._highlight_after_id = None
+        app._sec_map = {}
+
+        agent = self._find(sections, "agent")[0]
+        app._sec_map["node"] = agent
+        app._tree.selection.return_value = ["node"]
+
+        app._jump_to_section()
+        start = f"{agent.start + 1}.0"
+        end = f"{max(agent.end, agent.start + 1) + 1}.0"
+        app._text.see.assert_called_once_with(start)
+        app._text.tag_add.assert_called_once_with("highlight", start, end)
+        app._text.after.assert_called_once_with(1500, app._clear_highlight)
+
+    def test_on_select_jumps_when_show_all(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = True
+        app._tree = MagicMock()
+        app._tree.selection.return_value = ["node"]
+        app._text = MagicMock()
+        app._highlight_after_id = None
+        app._sec_map = {}
+        agent = self._find(sections, "agent")[0]
+        app._sec_map["node"] = agent
+        app._jump_to_section = MagicMock()
+
+        app._on_select(None)
+        app._jump_to_section.assert_called_once()
+
+    def test_on_select_multiselect_displays_sections(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = False
+        app._tree = MagicMock()
+        app._tree.selection.return_value = ["a", "s"]
+        app._sec_map = {}
+        agent = self._find(sections, "agent")[0]
+        system = self._find(sections, "system")[0]
+        app._sec_map["a"] = agent
+        app._sec_map["s"] = system
+        app._display_sections = MagicMock()
+
+        app._on_select(None)
+        app._display_sections.assert_called_once_with([agent, system])
+
+    def test_on_select_ignores_unknown_selection(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = False
+        app._tree = MagicMock()
+        app._tree.selection.return_value = ["unknown"]
+        app._sec_map = {}
+        app._display_sections = MagicMock()
+
+        app._on_select(None)
+        app._display_sections.assert_not_called()
