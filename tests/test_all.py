@@ -1546,6 +1546,88 @@ class TestExecutionEngine:
         })
         assert engine._log_dir == cli_dir
 
+    def test_log_phase_banner_inside_agent(self, tmp_path):
+        from core.engine import ExecutionEngine
+        from core.runner import OpenCodeOptions
+        from tools.looplog import LogParser
+
+        log_dir = tmp_path
+        engine = ExecutionEngine(log_dir=str(log_dir))
+        runner = self._make_mock_runner(
+            [
+                {"success": True, "output": '<state_update>{"is_complete": false}</state_update>'},
+                {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+                {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+            ]
+        )
+        runner.PROMPT_FILENAME = "current_prompt.md"
+        engine.runner = runner
+        engine.agent_loader = self._make_mock_agent_loader(
+            {"prep": "Prep", "a": "Agent", "fin": "Fin"}
+        )
+        engine.config = type("C", (), {
+            "opencode_defaults": OpenCodeOptions(),
+            "workdir": None,
+            "init_script": None,
+            "log_dir": str(log_dir),
+            "no_log_file": False,
+            "default_max_loops": 10,
+        })()
+        state = engine.execute_workflow_data({
+            "preparation_agents": ["prep"],
+            "loop_agents": ["a"],
+            "finalization_agents": ["fin"],
+            "max_loops": 1,
+            "end_state_condition": "is_complete == True",
+            "name": "logtest",
+            "log_dir": str(log_dir),
+        })
+        assert state.termination_reason == "completed"
+
+        log_files = list(log_dir.glob("openloop-run-logtest-*.log"))
+        assert len(log_files) == 1
+        parser = LogParser(log_files[0])
+        sections = parser.parse()
+        assert sections and sections[0].tag == "openloop_log"
+        root = sections[0]
+
+        def collect(sec):
+            yield sec
+            for c in sec.children:
+                yield from collect(c)
+
+        def text(sec):
+            return parser.get_raw_text(sec.start, sec.end)
+
+        all_secs = list(collect(root))
+
+        # Phase label messages plus the banner must live INSIDE the agent.
+        phase_labels = ("Preparation phase:", "  Running agent:", "Finalization phase:")
+        for sec in all_secs:
+            if sec.tag != "system":
+                continue
+            if not any(label in text(sec) for label in phase_labels):
+                continue
+            parent = next(
+                (p for p in all_secs if any(c is sec for c in p.children)), None
+            )
+            assert parent is not None and parent.tag == "agent", (
+                f"system section with phase label must be inside <agent> "
+                f"(found under <{getattr(parent, 'tag', None)}>)"
+            )
+            assert "=" * 20 in text(sec), (
+                "phase label and banner must be in the same system block"
+            )
+
+        # Every agent run must contain its label+banner system block.
+        agents = [s for s in all_secs if s.tag == "agent"]
+        assert len(agents) == 3  # preparation, loop, finalization
+        for agent in agents:
+            sys_blocks = [c for c in agent.children if c.tag == "system"]
+            assert any("=" * 20 in text(s) for s in sys_blocks), (
+                f"agent {agent.label} is missing its banner system block"
+            )
+
     # -- helpers --
 
     @staticmethod

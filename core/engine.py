@@ -328,19 +328,28 @@ class ExecutionEngine:
         run_id = self._get_run_id()
         ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        self._log_system(
-            f"{'=' * 70}\n"
-            f"  {ts} | "
-            f"Agent: {agent_name} | Phase: {self.state.current_phase} | "
-            f"Iteration: {self.state.iteration} | Run ID: {run_id}\n"
-            f"{'=' * 70}"
-        )
+        phase = self.state.current_phase
+        if phase == "preparation":
+            label = f"[OpenLoop] Preparation phase: {agent_name}"
+        elif phase == "finalization":
+            label = f"[OpenLoop] Finalization phase: {agent_name}"
+        else:
+            label = f"[OpenLoop]   Running agent: {agent_name}"
+
         self._flush_system()
         self._write_log(
             f"<agent name={json.dumps(agent_name)} "
-            f"phase={json.dumps(self.state.current_phase)} "
+            f"phase={json.dumps(phase)} "
             f"iteration=\"{self.state.iteration}\" "
             f"run_id={json.dumps(run_id)}>\n"
+        )
+        self._log_system(
+            f"{label}\n"
+            f"{'=' * 70}\n"
+            f"  {ts} | "
+            f"Agent: {agent_name} | Phase: {phase} | "
+            f"Iteration: {self.state.iteration} | Run ID: {run_id}\n"
+            f"{'=' * 70}"
         )
 
     # ---- Run metadata ----
@@ -600,8 +609,6 @@ class ExecutionEngine:
         self._notify_state()
 
         for agent_name in workflow.preparation_agents:
-            self.log(f"Preparation phase: {agent_name}")
-
             if not self._execute_agent(agent_name):
                 return False
 
@@ -641,8 +648,6 @@ class ExecutionEngine:
             )
 
             for agent_name in workflow.loop_agents:
-                self.log(f"  Running agent: {agent_name}")
-
                 if not self._execute_agent(agent_name):
                     self._flush_system()
                     self._write_log("</iteration>\n")
@@ -698,8 +703,6 @@ class ExecutionEngine:
         self._notify_state()
 
         for agent_name in workflow.finalization_agents:
-            self.log(f"Finalization phase: {agent_name}")
-
             if not self._execute_agent(agent_name):
                 return False
 
