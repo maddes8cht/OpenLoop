@@ -207,6 +207,11 @@ tempCodeRunnerFile.py
 openloop.json
 .openloop/
 
+# Local workflow experiments — only curated examples are tracked.
+workflows/*.json
+!workflows/test_generation.json
+!workflows/test_generation-full.json
+
 # Ruff stuff:
 .ruff_cache/
 
