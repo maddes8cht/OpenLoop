@@ -237,6 +237,7 @@ class ExecutionEngine:
         self._log_handle = None
         self._log_path: Optional[Path] = None
         self._log_dir: Optional[Path] = None
+        self._system_open = False
         self._verbose = verbose
         self._no_log_file = no_log_file
         self._log_file_arg = log_file
@@ -285,18 +286,22 @@ class ExecutionEngine:
 
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log_handle = self._log_path.open("w", encoding="utf-8")
+        self._system_open = False
 
-        self._write_log(
+        self._write_log("<openloop_log>\n")
+        self._log_system(
             f"OpenLoop run started at "
-            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
     def _close_log(self) -> None:
         if self._log_handle:
-            self._write_log(
-                f"\nOpenLoop run finished at "
-                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            self._log_system(
+                f"OpenLoop run finished at "
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             )
+            self._flush_system()
+            self._write_log("</openloop_log>\n")
             self._log_handle.close()
             self._log_handle = None
 
@@ -305,22 +310,37 @@ class ExecutionEngine:
             self._log_handle.write(text)
             self._log_handle.flush()
 
+    def _log_system(self, content: str) -> None:
+        """Write into a <system> block, merging with any adjacent one."""
+        if self._system_open:
+            self._write_log(f"{content}\n")
+        else:
+            self._write_log(f"<system>\n{content}\n")
+            self._system_open = True
+
+    def _flush_system(self) -> None:
+        """Close the currently open <system> block before a non-system write."""
+        if self._system_open:
+            self._write_log("</system>\n")
+            self._system_open = False
+
     def _write_banner(self, agent_name: str) -> None:
         run_id = self._get_run_id()
         ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        self._write_log(
+        self._log_system(
             f"{'=' * 70}\n"
             f"  {ts} | "
             f"Agent: {agent_name} | Phase: {self.state.current_phase} | "
             f"Iteration: {self.state.iteration} | Run ID: {run_id}\n"
-            f"{'=' * 70}\n\n"
+            f"{'=' * 70}"
         )
+        self._flush_system()
         self._write_log(
-            f"##! BEGIN_AGENT_RUN agent={json.dumps(agent_name)} "
+            f"<agent name={json.dumps(agent_name)} "
             f"phase={json.dumps(self.state.current_phase)} "
-            f"iteration={self.state.iteration} "
-            f"run_id={json.dumps(run_id)}\n"
+            f"iteration=\"{self.state.iteration}\" "
+            f"run_id={json.dumps(run_id)}>\n"
         )
 
     # ---- Run metadata ----
@@ -612,7 +632,11 @@ class ExecutionEngine:
 
             self.state.iteration += 1
             self._notify_state()
-            self.log(
+            self._flush_system()
+            self._write_log(
+                f"<iteration number=\"{self.state.iteration}\" max=\"{workflow.max_loops}\">\n"
+            )
+            self._log_system(
                 f"Loop iteration {self.state.iteration}/{workflow.max_loops}"
             )
 
@@ -620,12 +644,16 @@ class ExecutionEngine:
                 self.log(f"  Running agent: {agent_name}")
 
                 if not self._execute_agent(agent_name):
+                    self._flush_system()
+                    self._write_log("</iteration>\n")
                     return False
 
                 if self._stop_event.is_set():
                     self.state.termination_reason = "stopped"
                     self._notify_state()
                     self.log("Execution stopped by user")
+                    self._flush_system()
+                    self._write_log("</iteration>\n")
                     return False
 
                 if self._evaluate_end_condition(workflow.end_state_condition):
@@ -635,7 +663,12 @@ class ExecutionEngine:
                     )
                     self.state.termination_reason = "completed"
                     self._notify_state()
+                    self._flush_system()
+                    self._write_log("</iteration>\n")
                     return True
+
+            self._flush_system()
+            self._write_log("</iteration>\n")
 
         self.state.termination_reason = "max_loops_reached"
         self._notify_state()
@@ -717,12 +750,14 @@ class ExecutionEngine:
             )
 
             if result.output:
-                self._write_log(f"[stdout]\n{result.output}\n\n")
+                self._flush_system()
+                self._write_log(f"<stdout>\n{result.output}\n</stdout>\n\n")
                 if self._verbose:
                     print(result.output)
 
             if result.error:
-                self._write_log(f"[stderr]\n{result.error}\n\n")
+                self._flush_system()
+                self._write_log(f"<stderr>\n{result.error}\n</stderr>\n\n")
                 if self._verbose:
                     print(result.error, file=sys.stderr)
 
@@ -733,7 +768,8 @@ class ExecutionEngine:
                 )
                 self.state.termination_reason = f"agent_error:{agent_name}"
                 self._notify_state()
-                self._write_log("##! END_AGENT_RUN\n")
+                self._flush_system()
+                self._write_log("</agent>\n")
                 return False
 
             # State is extracted exclusively from the agent response.
@@ -763,7 +799,8 @@ class ExecutionEngine:
             self.state.merge(state_data)
             self._notify_state()
             self.log(f"  State updated: {json.dumps(state_data)}")
-            self._write_log("##! END_AGENT_RUN\n")
+            self._flush_system()
+            self._write_log("</agent>\n")
             return True
 
         self.log(
@@ -775,13 +812,15 @@ class ExecutionEngine:
                 f"  User chose to continue despite missing state update "
                 f"from '{agent_name}'."
             )
-            self._write_log("##! END_AGENT_RUN\n")
+            self._flush_system()
+            self._write_log("</agent>\n")
             return True
 
         self.state.termination_reason = f"missing_state:{agent_name}"
         self._notify_state()
         self.log("  Workflow aborted due to missing state update.")
-        self._write_log("##! END_AGENT_RUN\n")
+        self._flush_system()
+        self._write_log("</agent>\n")
         return False
 
     def _build_prompt(self, agent: AgentDefinition) -> str:
@@ -935,4 +974,4 @@ class ExecutionEngine:
 
     def log(self, message: str) -> None:
         self.logger(message)
-        self._write_log(f"[OpenLoop] {message}\n")
+        self._log_system(f"[OpenLoop] {message}")

@@ -14,10 +14,10 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, List
 
 
-# ── Markers ──────────────────────────────────────────────────────────────
+# ── Markers (legacy formats) ─────────────────────────────────────────────
 
 BEGIN_MARKER = "##! BEGIN_AGENT_RUN"
 END_MARKER = "##! END_AGENT_RUN"
@@ -43,7 +43,8 @@ _MARKER_LINE_RE = re.compile(r"^##!\s+\S+_AGENT_RUN")
 
 @dataclass
 class Section:
-    kind: str
+    kind: str  # "xml" or legacy: "head", "phase", "agent", "iteration", "tail"
+    tag: str   # XML tag / legacy kind
     label: str
     start: int
     end: int
@@ -66,17 +67,179 @@ class _RunBoundary:
 
 # ── Parser ───────────────────────────────────────────────────────────────
 
+# Structural XML tags emitted by the engine. `state_update` is NOT structural:
+# it is agent content written verbatim inside <stdout>.
+_STRUCTURAL_TAGS = {"openloop_log", "iteration", "agent", "stdout", "stderr", "system"}
+
+# XML tags recognized as sections (structural tags + agent state updates so
+# the "state_update" filter can find them).
+_ALLOWED_TAGS = _STRUCTURAL_TAGS | {"state_update"}
+
+# Lines that are exactly an engine structural tag (open or close) are stripped
+# when displaying raw text. Lines merely *starting* with "<" (tracebacks, HTML,
+# agent state updates, comparisons) are content and are preserved.
+_STRUCTURAL_LINE_RE = re.compile(
+    r"^\s*</?(?:openloop_log|iteration|agent|stdout|stderr|system)"
+    r"(?:\s+[^>]*)?>\s*$"
+)
+
+
 class LogParser:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.lines = path.read_text("utf-8").splitlines(keepends=True)
         self.line_count = len(self.lines)
-        self._has_markers = any(
-            line.startswith(BEGIN_MARKER) for line in self.lines
+        self._has_xml = (
+            self.line_count > 0
+            and self.lines[0].strip().startswith("<openloop_log>")
         )
 
     def parse(self) -> list[Section]:
-        if self._has_markers:
+        if self._has_xml:
+            return self._parse_xml()
+        return self._parse_legacy()
+
+    # -- XML parsing (current format) --
+
+    def _parse_xml(self) -> list[Section]:
+        """Parse the log as XML using a resilient stack-based tokenizer.
+
+        The engine wraps everything in well-formed tags, but agent output
+        inside <stdout>/<stderr> is arbitrary text (and may itself contain
+        <state_update> blocks that can be truncated by a crash). Recovery
+        strategy: when a closing tag does not match the top of the stack, pop
+        down to the nearest matching opening tag, auto-closing any truncated
+        sections in between. Stray closing tags with no matching opener are
+        ignored.
+        """
+        stack: list[Section] = []
+        sections: list[Section] = []
+
+        for i, line in enumerate(self.lines):
+            pos = 0
+            while True:
+                lt = line.find("<", pos)
+                if lt == -1:
+                    break
+                gt = line.find(">", lt)
+                if gt == -1:
+                    break  # malformed rest of line, stop scanning it
+                raw = line[lt + 1:gt].strip()
+                pos = gt + 1
+                if not raw:
+                    continue
+
+                is_closing = raw.startswith("/")
+                name = (
+                    raw[1:].split(" ", 1)[0].strip()
+                    if is_closing
+                    else raw.split(" ", 1)[0].strip()
+                )
+                if name not in _ALLOWED_TAGS:
+                    continue  # not one of ours, treat as content
+
+                if is_closing:
+                    self._close_tag(stack, sections, name, i)
+                else:
+                    self._open_tag(stack, line, i, raw, name)
+
+        # Auto-close any tags left open by a truncated file.
+        while stack:
+            sec = stack.pop()
+            sec.end = self.line_count
+            if stack:
+                stack[-1].children.append(sec)
+            else:
+                sections.append(sec)
+
+        self._merge_system_sections(sections)
+        return sections
+
+    def _merge_system_sections(self, sections: list[Section]) -> None:
+        """Collapse consecutive sibling <system> sections into one block.
+
+        The engine already writes consecutive system messages as a single
+        block; this is a fallback for logs generated before that change.
+        """
+        for sec in sections:
+            if sec.children:
+                self._merge_system_sections(sec.children)
+            merged: list[Section] = []
+            for child in sec.children:
+                if merged and merged[-1].tag == "system" and child.tag == "system":
+                    merged[-1].end = child.end
+                else:
+                    merged.append(child)
+            sec.children = merged
+
+    def _open_tag(self, stack: list[Section], line: str, i: int,
+                  raw: str, name: str) -> None:
+        attrs: Dict[str, str] = {}
+        if len(stack) == 0 and name != "openloop_log":
+            # A structural tag outside the root is malformed; ignore it.
+            return
+        parts = raw.split(" ", 1)
+        if len(parts) > 1:
+            for attr in parts[1].split(" "):
+                if "=" in attr:
+                    k, v = attr.split("=", 1)
+                    v = v.strip()
+                    if v.startswith('"') and v.endswith('"'):
+                        v = v[1:-1].replace('\\"', '"').replace('\\\\', '\\')
+                    attrs[k.strip()] = v
+        label = self._label_for(name, attrs)
+        stack.append(Section("xml", name, label, i, self.line_count))
+
+    def _close_tag(self, stack: list[Section], sections: list[Section],
+                   name: str, i: int) -> None:
+        if not stack:
+            return
+        # Find the nearest matching opener (may be below truncated sections).
+        idx = -1
+        for k in range(len(stack) - 1, -1, -1):
+            if stack[k].tag == name:
+                idx = k
+                break
+        if idx == -1:
+            return  # stray closing tag with no opener: ignore
+        # Auto-close truncated sections above the match.
+        while len(stack) - 1 > idx:
+            sec = stack.pop()
+            sec.end = i
+            stack[-1].children.append(sec)
+        sec = stack.pop()
+        sec.end = i + 1
+        if stack:
+            stack[-1].children.append(sec)
+        else:
+            sections.append(sec)
+
+    def _label_for(self, tag: str, attrs: Dict[str, str]) -> str:
+        if tag == "openloop_log":
+            return "OpenLoop Log"
+        if tag == "iteration":
+            num = attrs.get("number", "?")
+            max_num = attrs.get("max", "?")
+            return f"Iteration {num}/{max_num}"
+        if tag == "agent":
+            name = attrs.get("name", "?")
+            phase = attrs.get("phase", "?")
+            iteration = attrs.get("iteration", "?")
+            return f"Agent: {name} (Phase: {phase}, Iteration: {iteration})"
+        if tag == "stdout":
+            return "Stdout"
+        if tag == "stderr":
+            return "Stderr"
+        if tag == "system":
+            return "System"
+        if tag == "state_update":
+            return "State Update"
+        return tag
+
+    # -- Legacy parsing (##! markers and banner inference) --
+
+    def _parse_legacy(self) -> list[Section]:
+        if self._has_markers():
             runs = self._find_runs_marker()
         else:
             runs = self._find_runs_inference()
@@ -86,10 +249,10 @@ class LogParser:
         # HEAD
         if runs:
             if runs[0].start > 0:
-                sections.append(Section("head", "HEAD", 0, runs[0].start))
+                sections.append(Section("head", "head", "HEAD", 0, runs[0].start))
         else:
             if self.line_count > 0:
-                sections.append(Section("head", "HEAD", 0, self.line_count))
+                sections.append(Section("head", "head", "HEAD", 0, self.line_count))
             return sections
 
         # Build contiguous phase blocks (preserving file order)
@@ -113,14 +276,13 @@ class LogParser:
             # Group runs within this block by iteration (loop only, >1 iter)
             iter_map: dict[int, list[Section]] = {}
             for r in block_runs:
-                agent_sec = Section(
-                    "agent", f"Agent: {r.agent}", r.start, r.end
-                )
+                agent_sec = Section("agent", "agent", f"Agent: {r.agent}",
+                                    r.start, r.end)
                 iter_map.setdefault(r.iteration, []).append(agent_sec)
 
             is_loop = pname == "loop"
             sorted_iters = sorted(iter_map.items())
-            phase_sec = Section("phase", f"Phase: {pname}", first, last)
+            phase_sec = Section("phase", "phase", f"Phase: {pname}", first, last)
 
             iterations_contiguous = True
             seen_end = 0
@@ -135,11 +297,8 @@ class LogParser:
                     iter_first = agent_list[0].start
                     iter_last = agent_list[-1].end
                     iter_sec = Section(
-                        "iteration",
-                        f"Iteration {inum}",
-                        iter_first,
-                        iter_last,
-                        children=agent_list,
+                        "iteration", "iteration", f"Iteration {inum}",
+                        iter_first, iter_last, children=agent_list,
                     )
                     phase_sec.children.append(iter_sec)
             else:
@@ -156,13 +315,15 @@ class LogParser:
         if sections:
             last_end = sections[-1].end
             if last_end < self.line_count:
-                sections.append(Section("tail", "TAIL", last_end, self.line_count))
+                sections.append(Section("tail", "tail", "TAIL", last_end,
+                                        self.line_count))
         elif self.line_count > 0:
-            sections.append(Section("head", "HEAD", 0, self.line_count))
+            sections.append(Section("head", "head", "HEAD", 0, self.line_count))
 
         return sections
 
-    # -- Marker-based run detection (new format) --
+    def _has_markers(self) -> bool:
+        return any(line.startswith(BEGIN_MARKER) for line in self.lines)
 
     def _find_runs_marker(self) -> list[_RunBoundary]:
         runs: list[_RunBoundary] = []
@@ -187,8 +348,6 @@ class LogParser:
                 current = None
 
         return runs
-
-    # -- Inference-based run detection (old format) --
 
     def _find_runs_inference(self) -> list[_RunBoundary]:
         runs: list[_RunBoundary] = []
@@ -232,14 +391,19 @@ class LogParser:
 
         return runs
 
+    # -- Text extraction --
+
     def get_raw_text(self, start: int, end: int, strip_markers: bool = True) -> str:
         if not strip_markers:
             return "".join(self.lines[start:end])
 
         out: list[str] = []
         for line in self.lines[start:end]:
-            if not _MARKER_LINE_RE.match(line):
-                out.append(line)
+            if _STRUCTURAL_LINE_RE.match(line):
+                continue  # strip engine structural tags
+            if _MARKER_LINE_RE.match(line):
+                continue  # strip legacy ##! markers
+            out.append(line)
         return "".join(out)
 
     def get_full_text(self, strip_markers: bool = True) -> str:
@@ -283,12 +447,22 @@ class LoopLogApp:
         menubar.add_cascade(label="File", menu=file_menu)
         self.root.config(menu=menubar)
 
-        # Top bar: current file label + All toggle
+        # Top bar: current file label + Filter + All toggle
         top = ttk.Frame(self.root, padding=(8, 4))
         top.pack(fill=tk.X)
 
         self._file_label = ttk.Label(top, text="No file loaded", foreground="gray")
         self._file_label.pack(side=tk.LEFT)
+
+        # Filter dropdown
+        self._filter_var = tk.StringVar(value="all")
+        self._filter_dropdown = ttk.Combobox(
+            top, textvariable=self._filter_var,
+            values=["all", "stdout", "stderr", "system", "state_update"],
+            state="readonly", width=12
+        )
+        self._filter_dropdown.pack(side=tk.RIGHT, padx=(0, 8))
+        self._filter_dropdown.bind("<<ComboboxSelected>>", self._on_filter_change)
 
         self._show_all = tk.BooleanVar(value=False)
         ttk.Button(top, text="Refresh", command=self._refresh).pack(side=tk.RIGHT, padx=(0, 8))
@@ -367,6 +541,12 @@ class LoopLogApp:
 
         self._path = path
         self._file_label.config(text=str(path.resolve()))
+        # Filters only apply to XML-format logs; disable for legacy logs.
+        is_xml = any(sec.kind == "xml" for sec in self.sections)
+        self._filter_var.set("all")
+        self._filter_dropdown.configure(
+            state="readonly" if is_xml else "disabled"
+        )
         self._rebuild_tree()
         self._show_all.set(False)
 
@@ -384,11 +564,12 @@ class LoopLogApp:
         for sec in self.sections:
             self._insert_node("", sec)
 
-        # Select the first section (HEAD) by default
+        # Select and display the first top-level section by default
         first = self._tree.get_children()
         if first:
             self._tree.selection_set(first[0])
             self._tree.see(first[0])
+        if self.sections:
             self._display_section(self.sections[0])
 
     def _insert_node(self, parent: str, sec: Section) -> str:
@@ -410,11 +591,54 @@ class LoopLogApp:
         if sec is not None:
             self._display_section(sec)
 
+    def _matching_sections(self, tag: str) -> list[Section]:
+        """All sections in the document with the given tag."""
+        matches: list[Section] = []
+
+        def walk(sec: Section) -> None:
+            if sec.tag == tag:
+                matches.append(sec)
+            for child in sec.children:
+                walk(child)
+
+        for sec in self.sections:
+            walk(sec)
+        return matches
+
     def _display_section(self, sec: Section) -> None:
         if self.parser is None:
             return
+
+        filter_tag = self._filter_var.get()
+        if filter_tag != "all":
+            # Show every matching block across the whole log, not just the
+            # first one.
+            matches = self._matching_sections(filter_tag)
+            if not matches:
+                self._set_text(f"No content matching filter: {filter_tag}")
+                return
+            parts: list[str] = []
+            for m in matches:
+                text = self.parser.get_raw_text(m.start, m.end).strip()
+                header = f"{'=' * 60}\n{m.label}  (lines {m.start + 1}-{m.end})\n"
+                parts.append(header + text)
+            self._set_text("\n\n".join(parts))
+            return
+
         text = self.parser.get_raw_text(sec.start, sec.end)
         self._set_text(text)
+
+    def _on_filter_change(self, _event: Optional[tk.Event] = None) -> None:
+        if self._show_all.get():
+            return  # Filtering is disabled in "Show entire file" mode
+        if not self.sections:
+            return
+        sel = self._tree.selection()
+        if not sel:
+            first = self._tree.get_children()
+            if first:
+                self._tree.selection_set(first[0])
+        self._on_select(None)
 
     def _on_show_all(self) -> None:
         if self.parser is None:
