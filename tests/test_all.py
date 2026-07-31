@@ -2332,3 +2332,155 @@ class TestLoopLogViewer:
 
         app._on_select(None)
         app._display_sections.assert_not_called()
+
+    # -- Handlers: hide-system, show-all, filter --
+
+    def test_on_hide_system_rebuilds_tree(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._update_filter_options = MagicMock()
+        app._rebuild_tree = MagicMock()
+
+        app._on_hide_system()
+        app._update_filter_options.assert_called_once()
+        app._rebuild_tree.assert_called_once()
+
+    def test_on_show_all_displays_full_text(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = True
+        app._set_text = MagicMock()
+
+        app._on_show_all()
+        app._set_text.assert_called_once_with(
+            parser.get_full_text(strip_markers=False)
+        )
+
+    def test_on_show_all_off_redraws_selection(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = False
+        app._tree = MagicMock()
+        app._tree.selection.return_value = ["node"]
+        app._on_select = MagicMock()
+
+        app._on_show_all()
+        app._on_select.assert_called_once_with(None)
+
+    def test_on_show_all_off_selects_first_when_none(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = False
+        app._tree = MagicMock()
+        app._tree.selection.return_value = ()
+        app._tree.get_children.return_value = ["n1"]
+        app._on_select = MagicMock()
+
+        app._on_show_all()
+        app._tree.selection_set.assert_called_once_with("n1")
+        app._on_select.assert_called_once_with(None)
+
+    def test_on_show_all_returns_without_parser(self):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app.parser = None
+        app._show_all = MagicMock()
+        app._set_text = MagicMock()
+
+        app._on_show_all()
+        app._set_text.assert_not_called()
+
+    def test_on_filter_change_disabled_in_show_all(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = True
+        app._on_select = MagicMock()
+
+        app._on_filter_change(None)
+        app._on_select.assert_not_called()
+
+    def test_on_filter_change_no_sections(self):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app.sections = []
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = False
+        app._on_select = MagicMock()
+
+        app._on_filter_change(None)
+        app._on_select.assert_not_called()
+
+    def test_on_filter_change_with_selection(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = False
+        app._tree = MagicMock()
+        app._tree.selection.return_value = ["node"]
+        app._on_select = MagicMock()
+
+        app._on_filter_change(None)
+        app._on_select.assert_called_once_with(None)
+        app._tree.selection_set.assert_not_called()
+
+    def test_on_filter_change_selects_first_when_none(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = False
+        app._tree = MagicMock()
+        app._tree.selection.return_value = ()
+        app._tree.get_children.return_value = ["n1"]
+        app._on_select = MagicMock()
+
+        app._on_filter_change(None)
+        app._tree.selection_set.assert_called_once_with("n1")
+        app._on_select.assert_called_once_with(None)
+
+    def test_load_log_resets_view_state(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app._file_label = MagicMock()
+        app._hide_system = MagicMock()
+        app._show_all = MagicMock()
+        app._update_filter_options = MagicMock()
+        app._rebuild_tree = MagicMock()
+
+        app.load_log(parser.path)
+        app._hide_system.set.assert_called_once_with(False)
+        app._show_all.set.assert_called_once_with(False)
+        app._update_filter_options.assert_called_once()
+        app._rebuild_tree.assert_called_once()
+        assert app.sections is not None
