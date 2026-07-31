@@ -5,6 +5,19 @@ A simple orchestration engine for OpenCode
 
 OpenLoop solves the "premature convergence" problem of single-agent systems by enforcing strict state isolation, externalized state management, and deterministic loop control, turning OpenCode from an interactive coding assistant into a robust, autonomous workflow engine.
 
+## 🎯 Why OpenLoop?
+
+OpenCode excels at interactive, single-turn coding tasks, but orchestrating **multi-step, autonomous workflows** (e.g., "generate tests → audit → iterate until coverage is 90%") is cumbersome:
+- **Manual execution**: Running `opencode run` repeatedly is tedious and error-prone.
+- **No state management**: Single-agent sessions lose context and "hallucinate" completion.
+- **Overkill alternatives**: Tools like Prefect/Airflow or MetaGPT are **too complex** for simple, linear workflows.
+
+OpenLoop fills this gap:
+✅ **Simple**: Zero dependencies, pure Python, JSON/YAML config.
+✅ **Deterministic**: Hard limits (`max_loops`), isolated agent contexts, no infinite loops.
+✅ **Budget-friendly**: No parallel execution → predictable costs (e.g., for Zen models).
+✅ **Experiment-ready**: GUI for quick prototyping, CLI for headless execution.
+
 ---
 
 ## 🧠 The Core Idea
@@ -132,6 +145,7 @@ Detailed reference documentation is available in the [`docs/`](./docs/) director
 
 ## ✨ Key Features
 
+### 🔧 Technical Features
 - **Built for OpenCode:** Deeply integrated with the `opencode run` headless command.
 - **Zero External Dependencies:** Built entirely on the Python 3.13+ Standard Library. No `pip install` required. Just clone and run.
 - **Context Isolation:** Agents run in fresh, isolated OpenCode contexts, preventing the "context pollution" that plagues single-agent workflows.
@@ -142,6 +156,13 @@ Detailed reference documentation is available in the [`docs/`](./docs/) director
 - **OpenCode Defaults:** Set global defaults for model, agent (`build`/`plan`), variant, and pure mode for every `opencode run` invocation – configurable in `openloop.json`, per workflow, or via `--opencode-defaults` CLI flag.
 - **CLI & GUI Modes:** Use the visual Tkinter builder for interactive workflow design, or run headless via `--cli` for CI/CD integration.
 - **Ready-to-Use Examples:** Ships with fully fleshed-out `amala.md` (author), `vera.md` (auditor), and `proteus.md` (analyst) agents, plus a working `test_generation` workflow.
+
+### 🏠 Perfect for Home Users & Experimenters
+- **No Overhead**: Runs in a single Python process – no servers, databases, or complex setup.
+- **Cost Control**: Sequential execution prevents budget overruns (unlike parallel LLM calls).
+- **Quick Feedback**: Live logs in GUI/CLI show progress in real-time.
+- **Git-Friendly**: Workflows (`*.json`) and agents (`*.md`) are human-readable and versionable.
+- **No Vendor Lock-in**: Works with any OpenCode-compatible LLM provider.
 
 ---
 
@@ -217,6 +238,28 @@ You can also run headless (requires `opencode` in PATH):
 python openloop.py --cli --workflow workflows/test_generation.json
 ```
 
+## 🚀 Quick Use Cases (Try These First!)
+
+### 1. **Automated Test Generation**
+- **Workflow**: `amala` (author) writes tests → `vera` (auditor) reviews → loop until coverage is 90%.
+- **Command**:
+  ```bash
+  python openloop.py --cli --workflow workflows/test_generation.json --workdir ~/my_project
+  ```
+- **Why?** Let OpenLoop run overnight while you sleep – wake up to a fully tested PR.
+
+### 2. **Documentation Refactoring**
+- **Workflow**: `proteus` (analyst) scans code → generates docstrings → `vera` (auditor) checks quality.
+- **Customize**: Edit `agents/proteus.md` to focus on specific modules.
+
+### 3. **Batch Code Reviews**
+- **Workflow**: Loop through a list of files, have `vera` audit each one, and collect feedback.
+- **Tip**: Use `--init-script "git checkout my-branch"` to automate reviews on feature branches.
+
+### 4. **Budget-Conscious LLM Usage**
+- **Problem**: Parallel LLM calls burn through your Zen budget in minutes.
+- **Solution**: OpenLoop runs agents **sequentially**, keeping costs predictable.
+
 Additional CLI options:
 
 | Flag | Description |
@@ -230,6 +273,30 @@ Additional CLI options:
 | `--config <path>` | Path to configuration file (default: `openloop.json` in CWD, falls back to `openloop.json` next to `openloop.py`) |
 
 ---
+
+## ⚖️ OpenLoop vs. Alternatives
+
+| Tool               | Complexity | Setup Time | Parallel Execution | Cost Control | Best For                          |
+|--------------------|------------|------------|--------------------|--------------|-----------------------------------|
+| **OpenLoop**       | ⭐          | ⭐ (5 min)  | ❌ No              | ✅ Excellent  | **Home users, linear workflows**  |
+| `opencode run`     | ⭐          | ⭐ (0 min)  | ❌ No              | ✅ Excellent  | Single-step tasks                 |
+| MetaGPT/AutoGen    | ⭐⭐⭐       | ⭐⭐ (30 min)| ✅ Yes             | ❌ Poor       | Multi-agent systems               |
+| Prefect/Airflow    | ⭐⭐⭐⭐      | ⭐⭐⭐ (1h+) | ✅ Yes             | ❌ Poor       | Enterprise pipelines              |
+| LangChain          | ⭐⭐        | ⭐⭐ (15 min)| ❌ No              | ✅ Good       | LLM chaining (not agent-focused)  |
+
+**When to choose OpenLoop?**
+- You need **simple, reliable orchestration** without complexity.
+- You want to **avoid budget surprises** from parallel LLM calls.
+- You prefer **human-readable configs** (JSON/Markdown) over Python code.
+- You work on **linear workflows** (e.g., "generate → review → iterate").
+
+## ⚠️ Limitations (And When to Avoid OpenLoop)
+
+OpenLoop is **not** a silver bullet. Avoid it if you need:
+- **Parallel execution**: Agents run sequentially (no multi-threading).
+- **Dynamic agent selection**: Agents must be predefined in the workflow.
+- **Real-time interaction**: No user input during execution (only at start/abort).
+- **Distributed systems**: Runs on a single machine (no Kubernetes/scaling).
 
 ## 🛣️ Roadmap
 
