@@ -2398,7 +2398,7 @@ class TestLoopLogViewer:
         app._on_select(None)
         app._jump_to_section.assert_called_once()
 
-    def test_on_select_multiselect_displays_sections(self, parser):
+    def test_on_select_multiselect_prunes_child_covered_by_parent(self, parser):
         from tools.looplog import LoopLogApp
 
         sections = parser.parse()
@@ -2417,7 +2417,79 @@ class TestLoopLogViewer:
         app._display_sections = MagicMock()
 
         app._on_select(None)
-        app._display_sections.assert_called_once_with([agent, system])
+        app._display_sections.assert_called_once_with([agent])
+
+    def test_on_select_multiselect_keeps_unrelated_sections(self, parser):
+        from tools.looplog import LoopLogApp
+        from tools.looplog import Section
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = False
+        app._tree = MagicMock()
+        app._sec_map = {}
+        # Two sections with non-overlapping line ranges are unrelated.
+        alpha = Section("xml", "agent", "alpha", 0, 10)
+        beta = Section("xml", "agent", "beta", 20, 30)
+        app._sec_map["a"] = alpha
+        app._sec_map["b"] = beta
+        app._tree.selection.return_value = ["a", "b"]
+        app._display_sections = MagicMock()
+
+        app._on_select(None)
+        app._display_sections.assert_called_once_with([alpha, beta])
+
+    def test_on_select_multiselect_keeps_sibling_children(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = False
+        app._tree = MagicMock()
+        app._tree.selection.return_value = ["o", "s"]
+        app._sec_map = {}
+        stdout = self._find(sections, "stdout")[0]
+        system = self._find(sections, "system")[0]
+        app._sec_map["o"] = stdout
+        app._sec_map["s"] = system
+        app._display_sections = MagicMock()
+
+        app._on_select(None)
+        app._display_sections.assert_called_once_with([stdout, system])
+
+    def test_prune_contained_leaves_identical_ranges(self):
+        from tools.looplog import Section, _prune_contained
+
+        a = Section("xml", "agent", "a", 0, 10)
+        b = Section("xml", "agent", "b", 0, 10)
+        assert _prune_contained([a, b]) == [a, b]
+
+    def test_prune_contained_keeps_overlapping_sections(self):
+        from tools.looplog import Section, _prune_contained
+
+        a = Section("xml", "agent", "a", 0, 20)
+        b = Section("xml", "agent", "b", 5, 25)
+        assert _prune_contained([a, b]) == [a, b]
+
+    def test_prune_contained_drops_nested_tail_equal_end(self):
+        from tools.looplog import Section, _prune_contained
+
+        parent = Section("xml", "agent", "parent", 0, 30)
+        child = Section("xml", "stdout", "child", 10, 30)
+        assert _prune_contained([parent, child]) == [parent]
+
+    def test_prune_contained_empty_and_single(self):
+        from tools.looplog import Section, _prune_contained
+
+        assert _prune_contained([]) == []
+        sec = Section("xml", "agent", "a", 0, 10)
+        assert _prune_contained([sec]) == [sec]
 
     def test_on_select_ignores_unknown_selection(self, parser):
         from tools.looplog import LoopLogApp

@@ -91,6 +91,28 @@ def _block_header(sec: Section) -> str:
     return f"{_SEPARATOR}\n{sec.label}  (lines {sec.start + 1}-{sec.end})\n"
 
 
+def _prune_contained(secs: list[Section]) -> list[Section]:
+    """Drop sections that are strictly contained in another selected section.
+
+    When a parent node and some of its children are selected together, the
+    children are fully covered by the parent's content and would only
+    duplicate output in the preview. The parent's selection wins; the covered
+    children are ignored in the preview (the treeview selection is untouched).
+    """
+    pruned: list[Section] = []
+    for i, sec in enumerate(secs):
+        covered = any(
+            j != i
+            and other.start <= sec.start
+            and sec.end <= other.end
+            and (other.start < sec.start or sec.end < other.end)
+            for j, other in enumerate(secs)
+        )
+        if not covered:
+            pruned.append(sec)
+    return pruned
+
+
 class LogParser:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -628,7 +650,7 @@ class LoopLogApp:
             return
         secs = [self._sec_map[i] for i in sel if i in self._sec_map]
         if secs:
-            self._display_sections(secs)
+            self._display_sections(_prune_contained(secs))
 
     def _jump_to_section(self) -> None:
         """Scroll the whole-file view to the selected section and highlight it."""
