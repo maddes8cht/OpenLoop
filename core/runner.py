@@ -107,6 +107,7 @@ class OpenCodeRunner:
                 prompt_file.parent.mkdir(parents=True, exist_ok=True)
                 prompt_file.write_text(prompt, encoding="utf-8")
                 cmd += ["--file", str(prompt_file.resolve())]
+            cmd += ["--dir", str(Path(cwd).resolve()) if cwd else "."]
             cmd += ["No valid state update found. Follow the instructions in the attached file."]
         else:
             if prompt_file is None:

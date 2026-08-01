@@ -686,6 +686,33 @@ class TestOpenCodeRunner:
             assert cmd[4:6] == ["--dir", "."]
             assert cmd[6] == "Follow the instructions in the attached file exactly."
 
+    def test_run_continue_session_uses_dir(self, tmp_path):
+        from core.runner import OpenCodeRunner
+
+        with patch("subprocess.run") as mock_run:
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = ""
+            mock_proc.stderr = ""
+            mock_run.return_value = mock_proc
+
+            workdir = tmp_path / "workdir"
+            workdir.mkdir()
+            prompt_file = workdir / ".openloop" / "current_prompt.md"
+
+            r = OpenCodeRunner(binary="my-opencode")
+            r.run(
+                "STATE UPDATE REQUIRED",
+                cwd=str(workdir),
+                continue_session=True,
+                prompt_file=prompt_file,
+            )
+            cmd = mock_run.call_args.kwargs["args"]
+            assert cmd[0:4] == ["my-opencode", "run", "-c", "--file"]
+            assert cmd[4].endswith("current_prompt.md")
+            assert cmd[5:7] == ["--dir", str(workdir.resolve())]
+            assert cmd[7] == "No valid state update found. Follow the instructions in the attached file."
+
 
 # ===========================================================================
 # core.agent — AgentLoader & AgentDefinition
@@ -1627,6 +1654,82 @@ class TestExecutionEngine:
             assert any("=" * 20 in text(s) for s in sys_blocks), (
                 f"agent {agent.label} is missing its banner system block"
             )
+
+    # -- correction prompt --
+
+    def test_correction_prompt_attempt1_is_lean(self):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+        prompt = engine._build_correction_prompt("missing", "amala", 1)
+        assert prompt.startswith("STATE UPDATE REQUIRED")
+        assert "<state_update>" in prompt
+        assert "</state_update>" in prompt
+        assert "FORMAT RULES" not in prompt
+        assert "No further work is needed" not in prompt
+        assert "STATE UPDATE REQUIRED" not in prompt[15:]
+
+    def test_correction_prompt_attempt1_uses_failure_hint(self):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+        prompt = engine._build_correction_prompt("missing", "amala", 1)
+        assert "no usable state block" in prompt
+        assert "Reconstruct the state" in prompt
+
+    def test_correction_prompt_attempt1_no_state_embedded(self):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+        engine.state.payload["summary"] = "secret marker"
+        prompt = engine._build_correction_prompt("missing", "amala", 1)
+        assert "secret marker" not in prompt
+
+    def test_correction_prompt_attempt2_embeds_initial_state(self):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+        state_json = '{"payload": {"summary": "marker-123"}}'
+        prompt = engine._build_correction_prompt("missing", "amala", 2, state_json)
+        assert prompt.startswith("FINAL STATE UPDATE REQUIRED")
+        assert "marker-123" in prompt
+        assert "Previous attempt failed:" in prompt
+        assert "at the start of this run" in prompt
+
+    def test_correction_prompt_attempt2_no_template(self):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+        prompt = engine._build_correction_prompt("missing", "amala", 2, "{}")
+        assert '{"is_complete": false, "payload": {"summary": "Brief factual summary of completed work"}}' not in prompt
+        assert "<state_update>" in prompt
+        assert "is_complete, termination_reason, and payload" in prompt
+
+    def test_correction_prompt_attempt2_uses_failure_hint(self):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+        prompt = engine._build_correction_prompt("file_reference", "amala", 2, "{}")
+        assert "You wrote or referenced a state file" in prompt
+
+    def test_correction_prompt_completion_rules(self):
+        from core.agent import AgentDefinition
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+
+        can_complete = AgentDefinition(
+            name="a", role="auditor", can_complete=True
+        )
+        prompt = engine._build_correction_prompt("missing", can_complete, 1)
+        assert "Set is_complete=true only if" in prompt
+
+        no_complete = AgentDefinition(
+            name="b", role="tester", can_complete=False
+        )
+        prompt = engine._build_correction_prompt("missing", no_complete, 1)
+        assert "Set is_complete=false." in prompt
+        assert "is_complete=true" not in prompt
 
     # -- helpers --
 

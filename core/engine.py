@@ -721,6 +721,7 @@ class ExecutionEngine:
 
         base_prompt = self._build_prompt(agent)
         prompt = base_prompt
+        initial_state_json = self.state.to_json()
 
         state_data = None
 
@@ -792,7 +793,9 @@ class ExecutionEngine:
                     f"correction attempt {attempt + 1}/{self.MAX_CORRECTIONS}"
                 )
                 reason = self._classify_state_failure(result.output)
-                prompt = self._build_correction_prompt(reason, agent, attempt + 1)
+                prompt = self._build_correction_prompt(
+                    reason, agent, attempt + 1, initial_state_json
+                )
             else:
                 self.log(
                     "  Max corrections reached — no valid state update found"
@@ -884,7 +887,7 @@ class ExecutionEngine:
         reason: str,
         agent: AgentDefinition | str,
         attempt: int = 1,
-        base_prompt: Optional[str] = None,
+        state_json: Optional[str] = None,
     ) -> str:
         if isinstance(agent, AgentDefinition):
             may_complete = self._agent_may_complete(agent)
@@ -903,50 +906,44 @@ class ExecutionEngine:
         if may_complete:
             completion = (
                 "Set is_complete=true only if your completion criteria are truly met; "
-                "otherwise set is_complete=false. The example shows syntax only."
+                "otherwise set is_complete=false."
             )
         else:
             completion = "Set is_complete=false."
-
-        format_rules = (
-            "FORMAT RULES:\n"
-            "- The state update MUST be a single strict JSON object inside <state_update> tags.\n"
-            "- Do NOT use Markdown, YAML, bullet-list, or any other format.\n"
-            "- Valid JSON only: no comments, no trailing commas, no unquoted keys.\n"
-            "- Do not wrap the JSON inside Markdown code fences within the <state_update> tags.\n"
-            "- Every key and string value must be double-quoted.\n"
-            "- The <state_update> block must be placed at the very end of your response."
-        )
 
         if attempt <= 1:
             return "\n".join([
                 "STATE UPDATE REQUIRED",
                 "",
                 failure,
-                "No further work is needed in this turn. Return the OpenLoop state now.",
                 "",
-                "Reply with exactly one <state_update> element containing one strict JSON object, using real values:",
+                "Return the state update as a single strict JSON object inside "
+                "<state_update> tags, exactly in this shape:",
                 "",
                 self.CORRECTION_EXAMPLE,
-                "",
-                format_rules,
                 "",
                 completion,
             ])
 
+        state_block = state_json or "{}"
         return "\n".join([
             "FINAL STATE UPDATE REQUIRED",
             "",
-            f"This is the last automatic correction. {failure}",
-            "No further work is needed in this turn. Return the OpenLoop state now.",
+            "Something seems really hard to produce a valid state update. Let us try again.",
             "",
-            "Reply with exactly one <state_update> element containing one strict JSON object, using real values:",
+            f"Previous attempt failed: {failure}",
             "",
-            self.CORRECTION_EXAMPLE,
+            "This was the current state you received at the start of this run:",
             "",
-            format_rules,
+            "```json",
+            state_block,
+            "```",
             "",
-            "If completion is not possible, set is_complete=false and describe the blocker briefly in payload.",
+            "Please provide the updated state based on your recent work.",
+            "Return it as a single strict JSON object inside <state_update> tags. "
+            "Use only is_complete, termination_reason, and payload as top-level keys, "
+            "keeping the payload structure from the state shown above.",
+            "",
             completion,
         ])
 
