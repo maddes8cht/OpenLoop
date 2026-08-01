@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
+import tkinter as tk
 
 
 # ===========================================================================
@@ -2226,6 +2227,8 @@ class TestLoopLogViewer:
         ):
             app = object.__new__(looplog.LoopLogApp)
             app.root = looplog.tk.Tk()
+            app._start_hide_system = False
+            app._start_show_all = False
             app._build_ui()
 
         assert captured.get("selectmode") == "extended"
@@ -2642,7 +2645,7 @@ class TestLoopLogViewer:
         app._tree.selection_set.assert_called_once_with("n1")
         app._on_select.assert_called_once_with(None)
 
-    def test_load_log_resets_view_state(self, parser):
+    def test_load_log_preserves_view_state(self, parser):
         from tools.looplog import LoopLogApp
 
         sections = parser.parse()
@@ -2654,8 +2657,145 @@ class TestLoopLogViewer:
         app._rebuild_tree = MagicMock()
 
         app.load_log(parser.path)
-        app._hide_system.set.assert_called_once_with(False)
-        app._show_all.set.assert_called_once_with(False)
+        app._hide_system.set.assert_not_called()
+        app._show_all.set.assert_not_called()
         app._update_filter_options.assert_called_once()
         app._rebuild_tree.assert_called_once()
         assert app.sections is not None
+
+    def test_on_wrap_lines_applies_word_wrap(self):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app._wrap_lines = MagicMock()
+        app._wrap_lines.get.return_value = True
+        app._text = MagicMock()
+
+        app._on_wrap_lines()
+        app._text.config.assert_called_once_with(wrap=tk.WORD)
+
+    def test_on_wrap_lines_applies_no_wrap(self):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app._wrap_lines = MagicMock()
+        app._wrap_lines.get.return_value = False
+        app._text = MagicMock()
+
+        app._on_wrap_lines()
+        app._text.config.assert_called_once_with(wrap=tk.NONE)
+
+    def test_build_ui_initializes_vars_from_start_flags(self):
+        from tools import looplog
+
+        checkbox_vars: dict[str, bool] = {}
+
+        class FakeBooleanVar:
+            def __init__(self, value=False):
+                self._value = value
+
+            def get(self):
+                return self._value
+
+        def fake_booleanvar(**kwargs):
+            return FakeBooleanVar(kwargs.get("value", False))
+
+        def fake_widget(*args, **kwargs):
+            return MagicMock()
+
+        def fake_checkbutton(parent, text, variable, **kwargs):
+            checkbox_vars[text] = variable.get()
+            return MagicMock()
+
+        with (
+            patch.object(looplog.tk, "Tk", return_value=MagicMock()),
+            patch.object(looplog.ttk, "Treeview", side_effect=fake_widget),
+            patch.object(looplog.tk, "Menu", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Frame", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Label", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Combobox", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Button", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Checkbutton", side_effect=fake_checkbutton),
+            patch.object(looplog.ttk, "PanedWindow", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Scrollbar", side_effect=fake_widget),
+            patch.object(looplog.tk, "Text", side_effect=fake_widget),
+            patch.object(looplog.tk, "BooleanVar", side_effect=fake_booleanvar),
+            patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
+        ):
+            app = object.__new__(looplog.LoopLogApp)
+            app.root = looplog.tk.Tk()
+            app._start_hide_system = True
+            app._start_show_all = True
+            app._build_ui()
+
+        assert checkbox_vars["Show entire file"] is True
+        assert checkbox_vars["Hide system tags"] is True
+        assert checkbox_vars["Wrap lines"] is False
+
+    def test_main_with_file_passes_flags_to_app(self, tmp_path, monkeypatch):
+        from tools import looplog
+
+        log = tmp_path / "test.log"
+        log.write_text("<openloop_log>\n</openloop_log>\n", encoding="utf-8")
+
+        captured = {}
+        app_mock = MagicMock()
+
+        def fake_app(path, hide_system=False, show_all=False):
+            captured["path"] = path
+            captured["hide_system"] = hide_system
+            captured["show_all"] = show_all
+            return app_mock
+
+        monkeypatch.setattr(looplog, "LoopLogApp", fake_app)
+        looplog.main([str(log), "--hide-system-tags", "--show-entire-file"])
+
+        assert captured["path"] == log
+        assert captured["hide_system"] is True
+        assert captured["show_all"] is True
+        app_mock.run.assert_called_once()
+
+    def test_main_without_flags_passes_false(self, tmp_path, monkeypatch):
+        from tools import looplog
+
+        log = tmp_path / "test.log"
+        log.write_text("<openloop_log>\n</openloop_log>\n", encoding="utf-8")
+
+        captured = {}
+        app_mock = MagicMock()
+
+        def fake_app(path, hide_system=False, show_all=False):
+            captured["hide_system"] = hide_system
+            captured["show_all"] = show_all
+            return app_mock
+
+        monkeypatch.setattr(looplog, "LoopLogApp", fake_app)
+        looplog.main([str(log)])
+
+        assert captured["hide_system"] is False
+        assert captured["show_all"] is False
+        app_mock.run.assert_called_once()
+
+    def test_main_missing_file_exits(self, tmp_path, monkeypatch):
+        from tools import looplog
+
+        monkeypatch.setattr(looplog, "LoopLogApp", MagicMock())
+        with pytest.raises(SystemExit) as exc:
+            looplog.main([str(tmp_path / "missing.log")])
+        assert exc.value.code == 1
+
+    def test_main_no_file_uses_none(self, monkeypatch):
+        from tools import looplog
+
+        captured = {}
+        app_mock = MagicMock()
+
+        def fake_app(path, hide_system=False, show_all=False):
+            captured["path"] = path
+            return app_mock
+
+        monkeypatch.setattr(looplog, "LoopLogApp", fake_app)
+        looplog.main([])
+
+        assert captured["path"] is None
+        app_mock.run.assert_called_once()

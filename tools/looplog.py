@@ -3,10 +3,11 @@
 LoopLog -- Standalone Tkinter viewer for structured OpenLoop log files.
 
 Usage:
-    python tools/looplog.py <logfile>
+    python tools/looplog.py <logfile> [--hide-system-tags] [--show-entire-file]
     python tools/looplog.py              # opens file dialog
 """
 
+import argparse
 import json
 import re
 import sys
@@ -447,7 +448,12 @@ class LoopLogApp:
     _DEF_WIN_W = 1200
     _DEF_WIN_H = 750
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        path: Optional[Path] = None,
+        hide_system: bool = False,
+        show_all: bool = False,
+    ) -> None:
         self.root = tk.Tk()
         self.root.title("LoopLog")
         self.root.minsize(self._MIN_WIN_W, self._MIN_WIN_H)
@@ -458,6 +464,8 @@ class LoopLogApp:
         self._path: Optional[Path] = path
         self._sec_map: dict[str, Section] = {}
         self._highlight_after_id: Optional[str] = None
+        self._start_hide_system = hide_system
+        self._start_show_all = show_all
 
         self._build_ui()
         self._setup_bindings()
@@ -494,18 +502,24 @@ class LoopLogApp:
         self._filter_dropdown.pack(side=tk.RIGHT, padx=(0, 8))
         self._filter_dropdown.bind("<<ComboboxSelected>>", self._on_filter_change)
 
-        self._show_all = tk.BooleanVar(value=False)
+        self._show_all = tk.BooleanVar(value=self._start_show_all)
         ttk.Button(top, text="Refresh", command=self._refresh).pack(side=tk.RIGHT, padx=(0, 8))
         ttk.Checkbutton(
             top, text="Show entire file", variable=self._show_all,
             command=self._on_show_all
         ).pack(side=tk.RIGHT)
-        self._hide_system = tk.BooleanVar(value=False)
+        self._hide_system = tk.BooleanVar(value=self._start_hide_system)
         self._hide_system_check = ttk.Checkbutton(
             top, text="Hide system tags", variable=self._hide_system,
             command=self._on_hide_system
         )
         self._hide_system_check.pack(side=tk.RIGHT, padx=(8, 0))
+
+        self._wrap_lines = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            top, text="Wrap lines", variable=self._wrap_lines,
+            command=self._on_wrap_lines
+        ).pack(side=tk.RIGHT, padx=(8, 0))
 
         # Main paned window
         self._paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
@@ -578,8 +592,6 @@ class LoopLogApp:
 
         self._path = path
         self._file_label.config(text=str(path.resolve()))
-        self._hide_system.set(False)
-        self._show_all.set(False)
         self._update_filter_options()
         self._rebuild_tree()
 
@@ -603,6 +615,10 @@ class LoopLogApp:
     def _on_hide_system(self) -> None:
         self._update_filter_options()
         self._rebuild_tree()
+
+    def _on_wrap_lines(self) -> None:
+        wrap = tk.WORD if self._wrap_lines.get() else tk.NONE
+        self._text.config(wrap=wrap)
 
     # -- Tree population --
 
@@ -765,15 +781,41 @@ class LoopLogApp:
 
 # ── CLI entry point ──────────────────────────────────────────────────────
 
-def main() -> None:
+def main(argv: Optional[list[str]] = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="looplog",
+        description="Standalone Tkinter viewer for structured OpenLoop log files.",
+    )
+    parser.add_argument(
+        "logfile",
+        nargs="?",
+        type=Path,
+        help="path to a log file (optional; opens a file dialog if omitted)",
+    )
+    parser.add_argument(
+        "--hide-system-tags",
+        action="store_true",
+        help="activate the 'Hide system tags' checkbox at startup",
+    )
+    parser.add_argument(
+        "--show-entire-file",
+        action="store_true",
+        help="activate the 'Show entire file' checkbox and render the whole file at startup",
+    )
+    args = parser.parse_args(argv)
+
     path: Optional[Path] = None
-    if len(sys.argv) > 1:
-        path = Path(sys.argv[1])
+    if args.logfile is not None:
+        path = args.logfile
         if not path.is_file():
             print(f"Error: file not found: {path}", file=sys.stderr)
             sys.exit(1)
 
-    app = LoopLogApp(path)
+    app = LoopLogApp(
+        path,
+        hide_system=args.hide_system_tags,
+        show_all=args.show_entire_file,
+    )
     app.run()
 
 
