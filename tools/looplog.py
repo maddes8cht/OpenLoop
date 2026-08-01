@@ -4,6 +4,7 @@ LoopLog -- Standalone Tkinter viewer for structured OpenLoop log files.
 
 Usage:
     python tools/looplog.py <logfile> [--hide-system-tags] [--show-entire-file]
+                           [--wrap-lines] [--filter {all,stdout,stderr,system,state_update}]
     python tools/looplog.py              # opens file dialog
 """
 
@@ -453,6 +454,8 @@ class LoopLogApp:
         path: Optional[Path] = None,
         hide_system: bool = False,
         show_all: bool = False,
+        wrap_lines: bool = False,
+        filter_tag: str = "all",
     ) -> None:
         self.root = tk.Tk()
         self.root.title("LoopLog")
@@ -466,6 +469,8 @@ class LoopLogApp:
         self._highlight_after_id: Optional[str] = None
         self._start_hide_system = hide_system
         self._start_show_all = show_all
+        self._start_wrap_lines = wrap_lines
+        self._start_filter = filter_tag
 
         self._build_ui()
         self._setup_bindings()
@@ -493,7 +498,7 @@ class LoopLogApp:
         self._file_label.pack(side=tk.LEFT)
 
         # Filter dropdown
-        self._filter_var = tk.StringVar(value="all")
+        self._filter_var = tk.StringVar(value=self._start_filter)
         self._filter_dropdown = ttk.Combobox(
             top, textvariable=self._filter_var,
             values=["all", "stdout", "stderr", "system", "state_update"],
@@ -515,7 +520,7 @@ class LoopLogApp:
         )
         self._hide_system_check.pack(side=tk.RIGHT, padx=(8, 0))
 
-        self._wrap_lines = tk.BooleanVar(value=False)
+        self._wrap_lines = tk.BooleanVar(value=self._start_wrap_lines)
         ttk.Checkbutton(
             top, text="Wrap lines", variable=self._wrap_lines,
             command=self._on_wrap_lines
@@ -540,7 +545,9 @@ class LoopLogApp:
         # Right: Text widget
         right_frame = ttk.Frame(self._paned)
         self._text = tk.Text(
-            right_frame, wrap=tk.NONE, state=tk.DISABLED,
+            right_frame,
+            wrap=tk.WORD if self._start_wrap_lines else tk.NONE,
+            state=tk.DISABLED,
             font=("Consolas", 10), bg="#1e1e1e", fg="#d4d4d4",
             insertbackground="white"
         )
@@ -802,6 +809,17 @@ def main(argv: Optional[list[str]] = None) -> None:
         action="store_true",
         help="activate the 'Show entire file' checkbox and render the whole file at startup",
     )
+    parser.add_argument(
+        "--wrap-lines",
+        action="store_true",
+        help="wrap long lines in the preview pane at startup",
+    )
+    parser.add_argument(
+        "--filter",
+        choices=["all", "stdout", "stderr", "system", "state_update"],
+        default="all",
+        help="preselect the content filter (default: all)",
+    )
     args = parser.parse_args(argv)
 
     path: Optional[Path] = None
@@ -815,6 +833,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         path,
         hide_system=args.hide_system_tags,
         show_all=args.show_entire_file,
+        wrap_lines=args.wrap_lines,
+        filter_tag=args.filter,
     )
     app.run()
 

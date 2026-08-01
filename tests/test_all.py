@@ -2229,6 +2229,8 @@ class TestLoopLogViewer:
             app.root = looplog.tk.Tk()
             app._start_hide_system = False
             app._start_show_all = False
+            app._start_wrap_lines = False
+            app._start_filter = "all"
             app._build_ui()
 
         assert captured.get("selectmode") == "extended"
@@ -2726,11 +2728,127 @@ class TestLoopLogViewer:
             app.root = looplog.tk.Tk()
             app._start_hide_system = True
             app._start_show_all = True
+            app._start_wrap_lines = True
+            app._start_filter = "all"
             app._build_ui()
 
         assert checkbox_vars["Show entire file"] is True
         assert checkbox_vars["Hide system tags"] is True
-        assert checkbox_vars["Wrap lines"] is False
+        assert checkbox_vars["Wrap lines"] is True
+
+    def test_build_ui_uses_wrap_word_when_start_wrap_lines(self):
+        from tools import looplog
+
+        text_kwargs = {}
+
+        def fake_text(parent, **kwargs):
+            text_kwargs.update(kwargs)
+            return MagicMock()
+
+        def fake_widget(*args, **kwargs):
+            return MagicMock()
+
+        with (
+            patch.object(looplog.tk, "Tk", return_value=MagicMock()),
+            patch.object(looplog.ttk, "Treeview", side_effect=fake_widget),
+            patch.object(looplog.tk, "Menu", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Frame", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Label", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Combobox", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Button", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Checkbutton", side_effect=fake_widget),
+            patch.object(looplog.ttk, "PanedWindow", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Scrollbar", side_effect=fake_widget),
+            patch.object(looplog.tk, "Text", side_effect=fake_text),
+            patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
+            patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
+        ):
+            app = object.__new__(looplog.LoopLogApp)
+            app.root = looplog.tk.Tk()
+            app._start_hide_system = False
+            app._start_show_all = False
+            app._start_wrap_lines = True
+            app._start_filter = "all"
+            app._build_ui()
+
+        assert text_kwargs.get("wrap") == tk.WORD
+
+    def test_build_ui_uses_wrap_none_when_not_start_wrap_lines(self):
+        from tools import looplog
+
+        text_kwargs = {}
+
+        def fake_text(parent, **kwargs):
+            text_kwargs.update(kwargs)
+            return MagicMock()
+
+        def fake_widget(*args, **kwargs):
+            return MagicMock()
+
+        with (
+            patch.object(looplog.tk, "Tk", return_value=MagicMock()),
+            patch.object(looplog.ttk, "Treeview", side_effect=fake_widget),
+            patch.object(looplog.tk, "Menu", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Frame", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Label", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Combobox", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Button", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Checkbutton", side_effect=fake_widget),
+            patch.object(looplog.ttk, "PanedWindow", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Scrollbar", side_effect=fake_widget),
+            patch.object(looplog.tk, "Text", side_effect=fake_text),
+            patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
+            patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
+        ):
+            app = object.__new__(looplog.LoopLogApp)
+            app.root = looplog.tk.Tk()
+            app._start_hide_system = False
+            app._start_show_all = False
+            app._start_wrap_lines = False
+            app._start_filter = "all"
+            app._build_ui()
+
+        assert text_kwargs.get("wrap") == tk.NONE
+
+    def test_build_ui_initializes_filter_var_from_start_filter(self):
+        from tools import looplog
+
+        captured = {}
+
+        class FakeStringVar:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        def fake_stringvar(**kwargs):
+            return FakeStringVar(**kwargs)
+
+        def fake_widget(*args, **kwargs):
+            return MagicMock()
+
+        with (
+            patch.object(looplog.tk, "Tk", return_value=MagicMock()),
+            patch.object(looplog.ttk, "Treeview", side_effect=fake_widget),
+            patch.object(looplog.tk, "Menu", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Frame", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Label", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Combobox", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Button", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Checkbutton", side_effect=fake_widget),
+            patch.object(looplog.ttk, "PanedWindow", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Scrollbar", side_effect=fake_widget),
+            patch.object(looplog.tk, "Text", side_effect=fake_widget),
+            patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
+            patch.object(looplog.tk, "StringVar", side_effect=fake_stringvar),
+        ):
+            app = object.__new__(looplog.LoopLogApp)
+            app.root = looplog.tk.Tk()
+            app._start_hide_system = False
+            app._start_show_all = False
+            app._start_wrap_lines = False
+            app._start_filter = "system"
+            app._build_ui()
+
+        assert captured.get("value") == "system"
 
     def test_main_with_file_passes_flags_to_app(self, tmp_path, monkeypatch):
         from tools import looplog
@@ -2741,18 +2859,26 @@ class TestLoopLogViewer:
         captured = {}
         app_mock = MagicMock()
 
-        def fake_app(path, hide_system=False, show_all=False):
+        def fake_app(path, hide_system=False, show_all=False,
+                     wrap_lines=False, filter_tag="all"):
             captured["path"] = path
             captured["hide_system"] = hide_system
             captured["show_all"] = show_all
+            captured["wrap_lines"] = wrap_lines
+            captured["filter_tag"] = filter_tag
             return app_mock
 
         monkeypatch.setattr(looplog, "LoopLogApp", fake_app)
-        looplog.main([str(log), "--hide-system-tags", "--show-entire-file"])
+        looplog.main(
+            [str(log), "--hide-system-tags", "--show-entire-file",
+             "--wrap-lines", "--filter", "stdout"]
+        )
 
         assert captured["path"] == log
         assert captured["hide_system"] is True
         assert captured["show_all"] is True
+        assert captured["wrap_lines"] is True
+        assert captured["filter_tag"] == "stdout"
         app_mock.run.assert_called_once()
 
     def test_main_without_flags_passes_false(self, tmp_path, monkeypatch):
@@ -2764,9 +2890,12 @@ class TestLoopLogViewer:
         captured = {}
         app_mock = MagicMock()
 
-        def fake_app(path, hide_system=False, show_all=False):
+        def fake_app(path, hide_system=False, show_all=False,
+                     wrap_lines=False, filter_tag="all"):
             captured["hide_system"] = hide_system
             captured["show_all"] = show_all
+            captured["wrap_lines"] = wrap_lines
+            captured["filter_tag"] = filter_tag
             return app_mock
 
         monkeypatch.setattr(looplog, "LoopLogApp", fake_app)
@@ -2774,6 +2903,8 @@ class TestLoopLogViewer:
 
         assert captured["hide_system"] is False
         assert captured["show_all"] is False
+        assert captured["wrap_lines"] is False
+        assert captured["filter_tag"] == "all"
         app_mock.run.assert_called_once()
 
     def test_main_missing_file_exits(self, tmp_path, monkeypatch):
@@ -2784,18 +2915,34 @@ class TestLoopLogViewer:
             looplog.main([str(tmp_path / "missing.log")])
         assert exc.value.code == 1
 
+    def test_main_invalid_filter_exits(self, tmp_path, monkeypatch):
+        from tools import looplog
+
+        log = tmp_path / "test.log"
+        log.write_text("<openloop_log>\n</openloop_log>\n", encoding="utf-8")
+
+        monkeypatch.setattr(looplog, "LoopLogApp", MagicMock())
+        with pytest.raises(SystemExit) as exc:
+            looplog.main([str(log), "--filter", "bogus"])
+        assert exc.value.code == 2
+
     def test_main_no_file_uses_none(self, monkeypatch):
         from tools import looplog
 
         captured = {}
         app_mock = MagicMock()
 
-        def fake_app(path, hide_system=False, show_all=False):
+        def fake_app(path, hide_system=False, show_all=False,
+                     wrap_lines=False, filter_tag="all"):
             captured["path"] = path
+            captured["wrap_lines"] = wrap_lines
+            captured["filter_tag"] = filter_tag
             return app_mock
 
         monkeypatch.setattr(looplog, "LoopLogApp", fake_app)
         looplog.main([])
 
         assert captured["path"] is None
+        assert captured["wrap_lines"] is False
+        assert captured["filter_tag"] == "all"
         app_mock.run.assert_called_once()
