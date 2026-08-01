@@ -5,6 +5,7 @@ LoopLog -- Standalone Tkinter viewer for structured OpenLoop log files.
 Usage:
     python tools/looplog.py <logfile> [--hide-system-tags] [--show-entire-file]
                            [--wrap-lines] [--filter {all,stdout,stderr,system,state_update}]
+                           [--watch]
     python tools/looplog.py              # opens file dialog
 """
 
@@ -449,6 +450,8 @@ class LoopLogApp:
     _DEF_WIN_W = 1200
     _DEF_WIN_H = 750
 
+    _WATCH_INTERVAL_MS = 500
+
     def __init__(
         self,
         path: Optional[Path] = None,
@@ -456,6 +459,7 @@ class LoopLogApp:
         show_all: bool = False,
         wrap_lines: bool = False,
         filter_tag: str = "all",
+        watch: bool = False,
     ) -> None:
         self.root = tk.Tk()
         self.root.title("LoopLog")
@@ -471,6 +475,10 @@ class LoopLogApp:
         self._start_show_all = show_all
         self._start_wrap_lines = wrap_lines
         self._start_filter = filter_tag
+        self._watch = watch
+        self._watch_active = False
+        self._watch_after_id: Optional[str] = None
+        self._watch_signature: Optional[tuple[int, int]] = None
 
         self._build_ui()
         self._setup_bindings()
@@ -601,6 +609,108 @@ class LoopLogApp:
         self._file_label.config(text=str(path.resolve()))
         self._update_filter_options()
         self._rebuild_tree()
+
+        self._stop_watching()
+        self._watch_signature = self._file_signature()
+        if self._watch and not self._is_log_complete():
+            self._start_watching()
+
+    # -- Watch mode (live refresh) --
+
+    def _file_signature(self) -> Optional[tuple[int, int]]:
+        """(size, mtime_ns) of the watched file, or None if it is gone."""
+        if self._path is None:
+            return None
+        try:
+            stat = self._path.stat()
+            return stat.st_size, stat.st_mtime_ns
+        except OSError:
+            return None
+
+    def _start_watching(self) -> None:
+        if self._watch_active:
+            return
+        if self._path is None or not self._path.is_file():
+            return
+        self._watch_active = True
+        self._watch_after_id = self.root.after(
+            self._WATCH_INTERVAL_MS, self._watch_poll
+        )
+
+    def _stop_watching(self) -> None:
+        self._watch_active = False
+        if self._watch_after_id is not None:
+            try:
+                self.root.after_cancel(self._watch_after_id)
+            except Exception:
+                pass
+            self._watch_after_id = None
+
+    def _watch_poll(self) -> None:
+        self._watch_after_id = None
+        if not self._watch_active:
+            return
+
+        sig = self._file_signature()
+        if sig is not None and sig != self._watch_signature:
+            if self._reload_preserving_selection():
+                self._watch_signature = sig
+                if self._is_log_complete():
+                    self._stop_watching()
+                    return
+
+        if self._watch_active:
+            self._watch_after_id = self.root.after(
+                self._WATCH_INTERVAL_MS, self._watch_poll
+            )
+
+    def _is_log_complete(self) -> bool:
+        """True when the file has a closing </openloop_log> tag."""
+        if self.parser is None or not self.parser.lines:
+            return True
+        return self.parser.lines[-1].strip() == "</openloop_log>"
+
+    def _reload_preserving_selection(self) -> bool:
+        """Re-parse the log and rebuild the tree, keeping the selection.
+
+        Returns True on success, False if the file could not be re-read
+        (so the caller keeps the previous signature and can retry).
+        """
+        if self._path is None:
+            return False
+        try:
+            self.parser = LogParser(self._path)
+            self.sections = self.parser.parse()
+        except Exception:
+            return False
+
+        keys = self._selection_keys()
+        self._update_filter_options()
+        self._rebuild_tree()
+        self._restore_selection(keys)
+        return True
+
+    def _selection_keys(self) -> list[tuple[str, str, int]]:
+        """Identifiers of the currently selected sections, by offset."""
+        keys: list[tuple[str, str, int]] = []
+        for node_id in self._tree.selection():
+            sec = self._sec_map.get(node_id)
+            if sec is not None:
+                keys.append((sec.kind, sec.tag, sec.start))
+        return keys
+
+    def _restore_selection(self, keys: list[tuple[str, str, int]]) -> None:
+        if not keys:
+            return
+        to_select: list[str] = []
+        for node_id, sec in self._sec_map.items():
+            if (sec.kind, sec.tag, sec.start) in keys:
+                to_select.append(node_id)
+        if not to_select:
+            return
+        self._tree.selection_set(to_select)
+        self._tree.see(to_select[0])
+        self._on_select(None)
 
     def _update_filter_options(self) -> None:
         # Filters only apply to XML-format logs; disable for legacy logs.
@@ -820,6 +930,11 @@ def main(argv: Optional[list[str]] = None) -> None:
         default="all",
         help="preselect the content filter (default: all)",
     )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="auto-refresh the view as the log file grows (stops once the run is complete)",
+    )
     args = parser.parse_args(argv)
 
     path: Optional[Path] = None
@@ -835,6 +950,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         show_all=args.show_entire_file,
         wrap_lines=args.wrap_lines,
         filter_tag=args.filter,
+        watch=args.watch,
     )
     app.run()
 

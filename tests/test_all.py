@@ -1,6 +1,7 @@
 """Comprehensive pytest suite for every function in the OpenLoop codebase."""
 
 import json
+import sys
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
@@ -1574,6 +1575,72 @@ class TestExecutionEngine:
         })
         assert engine._log_dir == cli_dir
 
+    def test_log_path_callback_called_with_existing_path(self, tmp_path):
+        from pathlib import Path
+        from core.engine import ExecutionEngine
+        from core.runner import OpenCodeOptions
+
+        log_dir = tmp_path
+        captured = {}
+        engine = ExecutionEngine(
+            log_dir=str(log_dir),
+            log_path_callback=lambda p: captured.update(path=Path(p)),
+        )
+        engine.runner = self._make_mock_runner(
+            [{"success": True, "output": '<state_update>{"is_complete": true}</state_update>'}]
+        )
+        engine.agent_loader = self._make_mock_agent_loader({"a": "Agent"})
+        engine.config = type("C", (), {
+            "opencode_defaults": OpenCodeOptions(),
+            "workdir": None,
+            "init_script": None,
+            "log_dir": str(log_dir),
+            "no_log_file": False,
+            "default_max_loops": 10,
+        })()
+        engine.execute_workflow_data({
+            "loop_agents": ["a"],
+            "max_loops": 1,
+            "end_state_condition": "is_complete == True",
+            "name": "cb-test",
+            "log_dir": str(log_dir),
+        })
+        assert "path" in captured
+        assert captured["path"].is_file()
+        assert captured["path"].name.startswith("openloop-run-cb-test-")
+        assert captured["path"].suffix == ".log"
+
+    def test_log_path_callback_not_called_without_file_logging(self, tmp_path):
+        from core.engine import ExecutionEngine
+        from core.runner import OpenCodeOptions
+
+        log_dir = tmp_path
+        captured = []
+        engine = ExecutionEngine(
+            log_dir=str(log_dir),
+            no_log_file=True,
+            log_path_callback=lambda p: captured.append(p),
+        )
+        engine.runner = self._make_mock_runner(
+            [{"success": True, "output": '<state_update>{"is_complete": true}</state_update>'}]
+        )
+        engine.agent_loader = self._make_mock_agent_loader({"a": "Agent"})
+        engine.config = type("C", (), {
+            "opencode_defaults": OpenCodeOptions(),
+            "workdir": None,
+            "init_script": None,
+            "log_dir": str(log_dir),
+            "no_log_file": True,
+            "default_max_loops": 10,
+        })()
+        engine.execute_workflow_data({
+            "loop_agents": ["a"],
+            "max_loops": 1,
+            "end_state_condition": "is_complete == True",
+            "log_dir": str(log_dir),
+        })
+        assert captured == []
+
     def test_log_phase_banner_inside_agent(self, tmp_path):
         from core.engine import ExecutionEngine
         from core.runner import OpenCodeOptions
@@ -1796,6 +1863,25 @@ class TestOpenLoopEntryPoint:
 
         args = parse_args(["--config", "custom.json"])
         assert args.config == "custom.json"
+
+    def test_parse_args_layout_valid(self):
+        from openloop import parse_args
+
+        args = parse_args(["--layout", "state"])
+        assert args.layout == "state"
+
+    def test_parse_args_layout_default(self):
+        from openloop import parse_args
+
+        args = parse_args([])
+        assert args.layout == "default"
+
+    def test_parse_args_layout_output_rejected(self):
+        from openloop import parse_args
+
+        with pytest.raises(SystemExit) as exc:
+            parse_args(["--layout", "output"])
+        assert exc.value.code == 2
 
     def test_main_cli_without_workflow_exits(self):
         from openloop import main
@@ -2152,6 +2238,199 @@ class TestWorkflowApp:
             app._stop_execution()
             app._stop_event.set.assert_called_once()
             assert app._running is False
+
+    def test_on_log_path_known_enables_button_and_auto_opens(self):
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
+            patch("ui.app.subprocess.Popen"),
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+            app._open_viewer_btn = MagicMock()
+            app._viewer_launched = False
+            app._running = True
+            app._open_looplog_viewer = MagicMock()
+
+            app._on_log_path_known("/tmp/dir/run.log")
+
+            assert app._active_log_path == Path("/tmp/dir/run.log")
+            app._open_viewer_btn.configure.assert_called_once_with(
+                state="normal"
+            )
+            app._open_looplog_viewer.assert_called_once()
+
+    def test_on_log_path_known_does_not_reopen(self):
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
+            patch("ui.app.subprocess.Popen"),
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+            app._open_viewer_btn = MagicMock()
+            app._viewer_launched = True
+            app._running = True
+            app._open_looplog_viewer = MagicMock()
+
+            app._on_log_path_known("/tmp/dir/run.log")
+
+            app._open_looplog_viewer.assert_not_called()
+            app._open_viewer_btn.configure.assert_called_once_with(
+                state="normal"
+            )
+
+    def test_start_execution_drains_stale_queue_events(self):
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
+            patch("ui.app.WorkflowApp._get_workflow_data"),
+            patch("ui.app.WorkflowApp._run_engine"),
+            patch("core.engine.ExecutionEngine"),
+            patch("ui.app.messagebox"),
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+            app._running = False
+            app._get_workflow_data = MagicMock(return_value={"loop_agents": [{}]})
+            app._open_viewer_btn = MagicMock()
+            app._log_text = MagicMock()
+            app._start_btn = MagicMock()
+            app._stop_btn = MagicMock()
+            app._stop_event = MagicMock()
+            app._log_dir_var = MagicMock()
+            app._log_dir_var.get.return_value = ".openloop"
+            app._no_log_file_var = MagicMock()
+            app._no_log_file_var.get.return_value = False
+            app._timeout_var = MagicMock()
+            app._timeout_var.get.return_value = "1800"
+            app._reset_state_display = MagicMock()
+            app._log = MagicMock()
+
+            app._log_queue.put(("log_path", "/old/run.log"))
+            app._log_queue.put(("__done__", None))
+
+            app._start_execution()
+
+            assert app._log_queue.empty()
+
+    def test_open_looplog_viewer_launches_subprocess(self, tmp_path):
+        from pathlib import Path
+
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+            app._active_log_path = Path(tmp_path / "run.log")
+            with patch("ui.app.subprocess.Popen") as popen:
+                app._open_looplog_viewer()
+            args = popen.call_args.args[0]
+            assert args[0] == sys.executable
+            assert args[1].endswith("looplog.py")
+            assert args[2] == str(app._active_log_path)
+            assert args[3] == "--watch"
+            assert args[4] == "--wrap-lines"
+
+    def test_open_looplog_viewer_noop_without_path(self):
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
+            patch("ui.app.subprocess.Popen") as popen,
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+            app._active_log_path = None
+            app._open_looplog_viewer()
+            popen.assert_not_called()
+
+    def test_execution_done_keeps_viewer_button_enabled(self):
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+            app._start_btn = MagicMock()
+            app._stop_btn = MagicMock()
+            app._status_dot = MagicMock()
+            app._open_viewer_btn = MagicMock()
+            app._execution_done()
+            app._open_viewer_btn.configure.assert_not_called()
+            assert app._running is False
+
+    def test_apply_layout_state_selects_tab(self):
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+            app._root = MagicMock()
+            app._preview_collapsible = MagicMock()
+            app._preview_collapsible.is_collapsed = True
+            app._output_notebook = MagicMock()
+
+            app._apply_layout("state", False)
+
+            app._root.geometry.assert_called_once_with("1280x720")
+            app._preview_collapsible._expand.assert_called_once()
+            app._output_notebook.select.assert_called_once_with(1)
+
+    def test_apply_layout_output_ignored(self):
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+            app._root = MagicMock()
+            app._output_notebook = MagicMock()
+
+            app._apply_layout("output", False)
+
+            app._output_notebook.select.assert_not_called()
 
 
 # ===========================================================================
@@ -2657,6 +2936,11 @@ class TestLoopLogViewer:
         app._show_all = MagicMock()
         app._update_filter_options = MagicMock()
         app._rebuild_tree = MagicMock()
+        app._watch = False
+        app._watch_active = False
+        app._watch_after_id = None
+        app._watch_signature = None
+        app.root = MagicMock()
 
         app.load_log(parser.path)
         app._hide_system.set.assert_not_called()
@@ -2850,6 +3134,197 @@ class TestLoopLogViewer:
 
         assert captured.get("value") == "system"
 
+    # -- Watch mode --
+
+    def test_file_signature_returns_size_and_mtime(self, parser):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app._path = parser.path
+        sig = app._file_signature()
+        assert sig is not None
+        assert sig[0] == parser.path.stat().st_size
+
+    def test_file_signature_none_when_missing(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app._path = tmp_path / "missing.log"
+        assert app._file_signature() is None
+
+    def test_start_watching_schedules_poll(self, parser):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app._path = parser.path
+        app._watch_active = False
+        app._watch_after_id = None
+        app.root = MagicMock()
+        app._WATCH_INTERVAL_MS = 500
+
+        app._start_watching()
+
+        assert app._watch_active is True
+        app.root.after.assert_called_once_with(
+            500, app._watch_poll
+        )
+
+    def test_start_watching_noop_without_path(self):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app._path = None
+        app._watch_active = False
+        app._watch_after_id = None
+        app.root = MagicMock()
+
+        app._start_watching()
+
+        assert app._watch_active is False
+        app.root.after.assert_not_called()
+
+    def test_watch_poll_reloads_on_change_and_reschedules(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        log = tmp_path / "live.log"
+        log.write_text(
+            "<openloop_log>\n</openloop_log>\n", encoding="utf-8"
+        )
+
+        app = object.__new__(LoopLogApp)
+        app._path = log
+        app._watch_active = True
+        app._watch_after_id = None
+        app.root = MagicMock()
+        app._WATCH_INTERVAL_MS = 500
+        app._watch_signature = (0, 0)
+        app._reload_preserving_selection = MagicMock()
+        app._is_log_complete = MagicMock(return_value=False)
+
+        app._watch_poll()
+
+        app._reload_preserving_selection.assert_called_once()
+        app.root.after.assert_called_once_with(
+            500, app._watch_poll
+        )
+
+    def test_watch_poll_stops_when_complete(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        log = tmp_path / "live.log"
+        log.write_text(
+            "<openloop_log>\n</openloop_log>\n", encoding="utf-8"
+        )
+
+        app = object.__new__(LoopLogApp)
+        app._path = log
+        app._watch_active = True
+        app._watch_after_id = None
+        app.root = MagicMock()
+        app._WATCH_INTERVAL_MS = 500
+        app._watch_signature = (0, 0)
+        app._reload_preserving_selection = MagicMock()
+        app._is_log_complete = MagicMock(return_value=True)
+
+        app._watch_poll()
+
+        app._reload_preserving_selection.assert_called_once()
+        assert app._watch_active is False
+        app.root.after.assert_not_called()
+
+    def test_watch_poll_skips_when_inactive(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app._path = tmp_path / "live.log"
+        app._watch_active = False
+        app._watch_after_id = None
+        app.root = MagicMock()
+        app._reload_preserving_selection = MagicMock()
+
+        app._watch_poll()
+
+        app._reload_preserving_selection.assert_not_called()
+        app.root.after.assert_not_called()
+
+    def test_watch_poll_no_reload_without_change(self, parser):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app._path = parser.path
+        app._watch_active = True
+        app._watch_after_id = None
+        app.root = MagicMock()
+        app._WATCH_INTERVAL_MS = 500
+        app._watch_signature = app._file_signature()
+        app._reload_preserving_selection = MagicMock()
+        app._is_log_complete = MagicMock(return_value=False)
+
+        app._watch_poll()
+
+        app._reload_preserving_selection.assert_not_called()
+        app.root.after.assert_called_once()
+
+    def test_is_log_complete_detects_closing_tag(self, tmp_path):
+        from tools.looplog import LogParser, LoopLogApp
+
+        log = tmp_path / "live.log"
+        log.write_text(
+            "<openloop_log>\n</openloop_log>\n", encoding="utf-8"
+        )
+        app = object.__new__(LoopLogApp)
+        app.parser = LogParser(log)
+        assert app._is_log_complete() is True
+
+    def test_is_log_complete_false_while_running(self, tmp_path):
+        from tools.looplog import LogParser, LoopLogApp
+
+        log = tmp_path / "live.log"
+        log.write_text(
+            "<openloop_log>\n<iteration number=\"1\" max=\"1\">\n",
+            encoding="utf-8",
+        )
+        app = object.__new__(LoopLogApp)
+        app.parser = LogParser(log)
+        assert app._is_log_complete() is False
+
+    def test_selection_keys_and_restore(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        agent = self._find(sections, "agent")[0]
+        app = object.__new__(LoopLogApp)
+        app._sec_map = {"n1": agent, "n2": sections[0]}
+        app._tree = MagicMock()
+        app._tree.selection.return_value = ["n1"]
+        app._on_select = MagicMock()
+
+        keys = app._selection_keys()
+        assert keys == [("xml", "agent", agent.start)]
+
+        app._tree.selection.reset_mock()
+        app._restore_selection(keys)
+        app._tree.selection_set.assert_called_once_with(["n1"])
+        app._on_select.assert_called_once_with(None)
+
+    def test_reload_preserving_selection(self, parser):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app._path = parser.path
+        app._update_filter_options = MagicMock()
+        app._rebuild_tree = MagicMock()
+        app._selection_keys = MagicMock(return_value=[("xml", "agent", 3)])
+        app._restore_selection = MagicMock()
+
+        app._reload_preserving_selection()
+
+        assert app.parser is not None
+        assert app.sections
+        app._update_filter_options.assert_called_once()
+        app._rebuild_tree.assert_called_once()
+        app._restore_selection.assert_called_once_with([("xml", "agent", 3)])
+
     def test_main_with_file_passes_flags_to_app(self, tmp_path, monkeypatch):
         from tools import looplog
 
@@ -2860,18 +3335,19 @@ class TestLoopLogViewer:
         app_mock = MagicMock()
 
         def fake_app(path, hide_system=False, show_all=False,
-                     wrap_lines=False, filter_tag="all"):
+                     wrap_lines=False, filter_tag="all", watch=False):
             captured["path"] = path
             captured["hide_system"] = hide_system
             captured["show_all"] = show_all
             captured["wrap_lines"] = wrap_lines
             captured["filter_tag"] = filter_tag
+            captured["watch"] = watch
             return app_mock
 
         monkeypatch.setattr(looplog, "LoopLogApp", fake_app)
         looplog.main(
             [str(log), "--hide-system-tags", "--show-entire-file",
-             "--wrap-lines", "--filter", "stdout"]
+             "--wrap-lines", "--filter", "stdout", "--watch"]
         )
 
         assert captured["path"] == log
@@ -2879,6 +3355,7 @@ class TestLoopLogViewer:
         assert captured["show_all"] is True
         assert captured["wrap_lines"] is True
         assert captured["filter_tag"] == "stdout"
+        assert captured["watch"] is True
         app_mock.run.assert_called_once()
 
     def test_main_without_flags_passes_false(self, tmp_path, monkeypatch):
@@ -2891,11 +3368,12 @@ class TestLoopLogViewer:
         app_mock = MagicMock()
 
         def fake_app(path, hide_system=False, show_all=False,
-                     wrap_lines=False, filter_tag="all"):
+                     wrap_lines=False, filter_tag="all", watch=False):
             captured["hide_system"] = hide_system
             captured["show_all"] = show_all
             captured["wrap_lines"] = wrap_lines
             captured["filter_tag"] = filter_tag
+            captured["watch"] = watch
             return app_mock
 
         monkeypatch.setattr(looplog, "LoopLogApp", fake_app)
@@ -2905,6 +3383,7 @@ class TestLoopLogViewer:
         assert captured["show_all"] is False
         assert captured["wrap_lines"] is False
         assert captured["filter_tag"] == "all"
+        assert captured["watch"] is False
         app_mock.run.assert_called_once()
 
     def test_main_missing_file_exits(self, tmp_path, monkeypatch):
@@ -2933,10 +3412,11 @@ class TestLoopLogViewer:
         app_mock = MagicMock()
 
         def fake_app(path, hide_system=False, show_all=False,
-                     wrap_lines=False, filter_tag="all"):
+                     wrap_lines=False, filter_tag="all", watch=False):
             captured["path"] = path
             captured["wrap_lines"] = wrap_lines
             captured["filter_tag"] = filter_tag
+            captured["watch"] = watch
             return app_mock
 
         monkeypatch.setattr(looplog, "LoopLogApp", fake_app)
@@ -2945,4 +3425,5 @@ class TestLoopLogViewer:
         assert captured["path"] is None
         assert captured["wrap_lines"] is False
         assert captured["filter_tag"] == "all"
+        assert captured["watch"] is False
         app_mock.run.assert_called_once()

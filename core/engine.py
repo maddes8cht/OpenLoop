@@ -219,11 +219,13 @@ class ExecutionEngine:
         timeout: Optional[int] = None,
         missing_state_handler: Optional[MissingStateHandler] = None,
         state_callback: Optional[Callable[[dict], None]] = None,
+        log_path_callback: Optional[Callable[[Path], None]] = None,
     ):
         self.config = config or Config()
         self.logger = logger or (lambda msg: print(f"[OpenLoop] {msg}"))
         self.state = WorkflowState()
         self._state_callback = state_callback
+        self._log_path_callback = log_path_callback
         self.agent_loader = AgentLoader(self.config.agents_dir)
 
         self._timeout = timeout if timeout is not None else self.config.default_timeout
@@ -293,6 +295,9 @@ class ExecutionEngine:
             f"OpenLoop run started at "
             f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
+
+        if self._log_path_callback:
+            self._log_path_callback(self._log_path)
 
     def _close_log(self) -> None:
         if self._log_handle:

@@ -1,6 +1,8 @@
 import json
 import os
 import queue
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from tkinter import (
@@ -179,6 +181,8 @@ class WorkflowApp:
         self._running = False
         self._current_max_loops: int = 10
         self._log_queue: queue.Queue = queue.Queue()
+        self._active_log_path: Optional[Path] = None
+        self._viewer_launched = False
         self._opencode_defaults_raw = opencode_defaults_raw
         self._cli_no_log_file = no_log_file
         self._cli_log_file = log_file
@@ -247,6 +251,13 @@ class WorkflowApp:
             state="disabled",
         )
         self._stop_btn.pack(side=LEFT, padx=2)
+        self._open_viewer_btn = Button(
+            toolbar,
+            text="LoopLog",
+            command=self._open_looplog_viewer,
+            state="disabled",
+        )
+        self._open_viewer_btn.pack(side=LEFT, padx=2)
 
         # Status bar labels (inline in toolbar)
         self._status_dot = Label(toolbar, text="●", fg="gray")
@@ -557,31 +568,7 @@ class WorkflowApp:
         self._preview_text.insert("1.0", "Select an agent to preview")
         self._preview_text.configure(state="disabled")
 
-        # Tab 2: Live Output (placeholder for #26)
-        output_tab = Frame(self._output_notebook)
-        output_tab.columnconfigure(0, weight=1)
-        output_tab.rowconfigure(0, weight=1)
-        self._output_notebook.add(output_tab, text="Live Output")
-
-        self._output_text = Text(
-            output_tab, wrap="word", state="disabled"
-        )
-        output_scroll = Scrollbar(
-            output_tab, command=self._output_text.yview
-        )
-        self._output_text.configure(yscrollcommand=output_scroll.set)
-        self._output_text.grid(row=0, column=0, sticky=(N, S, W, E))
-        output_scroll.grid(row=0, column=1, sticky=(N, S))
-
-        self._output_text.configure(state="normal")
-        self._output_text.insert(
-            "1.0",
-            "Live agent output will appear here\n"
-            "(requires Issue #26)",
-        )
-        self._output_text.configure(state="disabled")
-
-        # Tab 3: State (live state display for #33)
+        # Tab 2: State (live state display for #33)
         state_tab = Frame(self._output_notebook)
         state_tab.columnconfigure(0, weight=1)
         state_tab.rowconfigure(2, weight=1)
@@ -1065,6 +1052,9 @@ class WorkflowApp:
                 log_dir=self._cli_log_dir,
                 timeout=timeout,
                 state_callback=lambda s: self._log_queue.put(("state", s)),
+                log_path_callback=lambda p: self._log_queue.put(
+                    ("log_path", str(p))
+                ),
             )
         except ImportError as exc:
             messagebox.showerror("Error", f"Missing core module: {exc}")
@@ -1076,9 +1066,20 @@ class WorkflowApp:
         self._log_text.configure(state="disabled")
         self._reset_state_display()
 
+        # Drop any events still queued from a previous run so they can't
+        # leak into this one (e.g. a stale log_path event).
+        while True:
+            try:
+                self._log_queue.get_nowait()
+            except queue.Empty:
+                break
+
         self._running = True
         self._start_btn.configure(state="disabled")
         self._stop_btn.configure(state="normal")
+        self._viewer_launched = False
+        self._active_log_path = None
+        self._open_viewer_btn.configure(state="disabled")
 
         self._log("--- Execution started ---")
         self._execution_thread = threading.Thread(
@@ -1103,6 +1104,42 @@ class WorkflowApp:
             self._log(f"Execution error: {exc}")
         finally:
             self._log_queue.put(("__done__", None))
+
+    def _on_log_path_known(self, path_str: str) -> None:
+        """Handle the engine's log_path event (called on the main thread)."""
+        self._active_log_path = Path(path_str)
+        self._open_viewer_btn.configure(state="normal")
+        if not self._viewer_launched:
+            if self._open_looplog_viewer():
+                self._viewer_launched = True
+
+    def _open_looplog_viewer(self) -> bool:
+        """Launch the standalone LoopLog viewer for the active log file.
+
+        Returns True when a viewer process was spawned, False otherwise.
+        """
+        if self._active_log_path is None:
+            return False
+        looplog_script = (
+            Path(__file__).resolve().parent.parent / "tools" / "looplog.py"
+        )
+        if not looplog_script.is_file():
+            self._log(f"LoopLog viewer not found: {looplog_script}")
+            return False
+        creationflags = 0
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(looplog_script),
+                str(self._active_log_path),
+                "--watch",
+                "--wrap-lines",
+            ],
+            creationflags=creationflags,
+        )
+        return True
 
     def _stop_execution(self) -> None:
         self._log("Stop requested — finishing current agent...")
@@ -1215,6 +1252,8 @@ class WorkflowApp:
             elif kind == "state":
                 self._update_status_bar(data)
                 self._update_state_tab(data)
+            elif kind == "log_path":
+                self._on_log_path_known(data)
 
         self._root.after(100, self._poll_log_queue)
 
@@ -1244,14 +1283,12 @@ class WorkflowApp:
             self._preview_collapsible._toggle()
 
     def _apply_layout(self, layout: str, fullscreen: bool) -> None:
-        if layout in ("preview", "output", "state"):
+        if layout in ("preview", "state"):
             self._root.geometry("1280x720")
             if self._preview_collapsible.is_collapsed:
                 self._preview_collapsible._expand()
-            if layout == "output":
+            if layout == "state":
                 self._output_notebook.select(1)
-            elif layout == "state":
-                self._output_notebook.select(2)
         if fullscreen:
             self._root.state("zoomed")
 
