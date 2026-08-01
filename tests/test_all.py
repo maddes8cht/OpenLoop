@@ -1723,6 +1723,97 @@ class TestExecutionEngine:
                 f"agent {agent.label} is missing its banner system block"
             )
 
+    # -- run summary --
+
+    def test_format_duration(self):
+        from datetime import timedelta
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+        assert engine._format_duration(timedelta(seconds=0)) == "0:00:00"
+        assert engine._format_duration(timedelta(seconds=3226)) == "0:53:46"
+        assert engine._format_duration(timedelta(seconds=7623)) == "2:07:03"
+
+    def test_termination_summary_line(self):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+        cases = {
+            "completed": "OpenLoop run completed successfully",
+            "stopped": "OpenLoop run stopped by user",
+            "max_loops_reached": "OpenLoop run stopped: max loops reached",
+            "agent_error:amala": "OpenLoop run stopped: agent error (amala)",
+            "missing_state:amala": (
+                "OpenLoop run stopped: agent 'amala' returned no state update"
+            ),
+            "": "OpenLoop run finished",
+        }
+        for reason, expected in cases.items():
+            engine.state.termination_reason = reason
+            assert engine._termination_summary_line() == expected
+
+    def test_log_summary_block(self, tmp_path):
+        from core.engine import ExecutionEngine
+        from core.runner import OpenCodeOptions
+        from tools.looplog import LogParser
+
+        log_dir = tmp_path
+        engine = ExecutionEngine(log_dir=str(log_dir))
+        runner = self._make_mock_runner(
+            [
+                {"success": True, "output": '<state_update>{"is_complete": false}</state_update>'},
+                {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+            ]
+        )
+        runner.PROMPT_FILENAME = "current_prompt.md"
+        engine.runner = runner
+        engine.agent_loader = self._make_mock_agent_loader({"a": "Agent"})
+        engine.config = type("C", (), {
+            "opencode_defaults": OpenCodeOptions(),
+            "workdir": None,
+            "init_script": None,
+            "log_dir": str(log_dir),
+            "no_log_file": False,
+            "default_max_loops": 10,
+        })()
+        state = engine.execute_workflow_data({
+            "loop_agents": ["a"],
+            "max_loops": 2,
+            "end_state_condition": "is_complete == True",
+            "name": "sumtest",
+            "log_dir": str(log_dir),
+        })
+        assert state.termination_reason == "completed"
+        assert state.iteration == 2
+
+        log_files = list(log_dir.glob("openloop-run-sumtest-*.log"))
+        assert len(log_files) == 1
+        parser = LogParser(log_files[0])
+        sections = parser.parse()
+        root = sections[0]
+
+        def collect(sec):
+            yield sec
+            for c in sec.children:
+                yield from collect(c)
+
+        def text(sec):
+            return parser.get_raw_text(sec.start, sec.end)
+
+        all_secs = list(collect(root))
+        top_sys = [
+            s for s in all_secs
+            if s.tag == "system" and any(c is s for c in root.children)
+        ]
+        assert top_sys, "expected at least one top-level system block"
+        summary = text(top_sys[-1])
+        assert "Workflow: sumtest" in summary
+        assert "OpenLoop run started at " in summary
+        assert "OpenLoop run finished at " in summary
+        assert "Finished 2 loop iterations" in summary
+        assert "OpenLoop run duration was " in summary
+        assert "OpenLoop run completed successfully" in summary
+
     # -- correction prompt --
 
     def test_correction_prompt_attempt1_is_lean(self):

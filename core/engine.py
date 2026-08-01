@@ -4,7 +4,7 @@ import threading
 import uuid
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -240,6 +240,7 @@ class ExecutionEngine:
         self._log_path: Optional[Path] = None
         self._log_dir: Optional[Path] = None
         self._system_open = False
+        self._start_time: Optional[datetime] = None
         self._verbose = verbose
         self._no_log_file = no_log_file
         self._log_file_arg = log_file
@@ -291,9 +292,10 @@ class ExecutionEngine:
         self._system_open = False
 
         self._write_log("<openloop_log>\n")
+        self._start_time = datetime.now()
         self._log_system(
             f"OpenLoop run started at "
-            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"{self._start_time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
         if self._log_path_callback:
@@ -301,14 +303,68 @@ class ExecutionEngine:
 
     def _close_log(self) -> None:
         if self._log_handle:
+            end_time = datetime.now()
+            # Close any dangling <system> block (e.g. after an unexpected
+            # exception) so the summary always lands in its own block.
+            self._flush_system()
+            self._log_system("")
+            if self._workflow_name:
+                self._log_system(f"Workflow: {self._workflow_name}")
+            if self._start_time:
+                start_line = (
+                    "OpenLoop run started at "
+                    f"{self._start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+            else:
+                start_line = "OpenLoop run started at (unknown)"
+            self._log_system(start_line)
             self._log_system(
                 f"OpenLoop run finished at "
-                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                f"{end_time.strftime('%Y-%m-%d %H:%M:%S')}"
             )
+            self._log_system("")
+            self._log_system(
+                f"Finished {self.state.iteration} loop iterations"
+            )
+            if self._start_time:
+                self._log_system(
+                    f"OpenLoop run duration was "
+                    f"{self._format_duration(end_time - self._start_time)}"
+                )
+            self._log_system("")
+            self._log_system(self._termination_summary_line())
             self._flush_system()
             self._write_log("</openloop_log>\n")
             self._log_handle.close()
             self._log_handle = None
+
+    @staticmethod
+    def _format_duration(delta: timedelta) -> str:
+        """Format a duration as H:MM:SS (e.g. 0:53:46, 2:07:03)."""
+        total = int(delta.total_seconds())
+        hours, rem = divmod(total, 3600)
+        minutes, seconds = divmod(rem, 60)
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+
+    def _termination_summary_line(self) -> str:
+        """Human-readable summary of why the run ended."""
+        reason = self.state.termination_reason or ""
+        if reason == "completed":
+            return "OpenLoop run completed successfully"
+        if reason == "stopped":
+            return "OpenLoop run stopped by user"
+        if reason == "max_loops_reached":
+            return "OpenLoop run stopped: max loops reached"
+        if reason.startswith("agent_error:"):
+            return f"OpenLoop run stopped: agent error ({reason[12:]})"
+        if reason.startswith("missing_state:"):
+            return (
+                f"OpenLoop run stopped: agent '{reason[14:]}' "
+                f"returned no state update"
+            )
+        if reason:
+            return f"OpenLoop run finished (reason: {reason})"
+        return "OpenLoop run finished"
 
     def _write_log(self, text: str) -> None:
         if self._log_handle:
