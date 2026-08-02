@@ -113,6 +113,7 @@ Relevant information may include:
 - `termination_reason`
 - `payload.summary`
 - `payload.target_module`
+- `payload.test_dir`
 - `payload.test_files`
 - `payload.tests_written`
 - `payload.missing_tests`
@@ -132,6 +133,12 @@ git status
 git branch --show-current
 git log --oneline -n 20
 git diff --name-only
+git merge-base HEAD main
+git merge-base HEAD master
+git merge-base HEAD origin/main
+git merge-base HEAD origin/master
+git log --name-status <base>..HEAD
+git diff --name-status <base>..HEAD
 python -m pytest --collect-only -q
 python -m pytest -q
 python -m pytest --cov=<target_module> --cov-report=term-missing -q
@@ -173,12 +180,47 @@ Only evaluate and recommend.
 
 Determine which tests are new or changed in this run.
 
+This workflow runs on a dedicated git branch (`openloop/test-generation-<run_id>`).  
+Test files may have been added or modified over multiple loop iterations.  
+`payload.test_files` only reflects the LAST loop iteration, so it is NOT authoritative.
+
 Prefer this order:
 
-1. Use `payload.test_files` if present.
-2. Use git information if available.
-3. Use recently added or modified test files under `tests/` or similar test directories.
+1. **Git branch diff (authoritative source):** use git to find all commits made during this run and all files they touched. Determine the branch point relative to the base branch, then evaluate the full diff over the whole run, not just the last iteration.
+
+2. Use `payload.test_files` only as a supplementary cross-check. It contains only the tests from the last loop iteration and must never be the sole basis for the review.
+
+3. Use recently added or modified test files under the test directory (`payload.test_dir`, default `tests/`) or similar test directories.
+
 4. Use the summaries from AMALA and VERA.
+
+### Finding the Branch Diff
+
+Recommended read-only git commands:
+
+```bash
+git branch --show-current
+git log --oneline -n 20
+git merge-base HEAD main
+git merge-base HEAD master
+git merge-base HEAD origin/main
+git merge-base HEAD origin/master
+git log --name-status <base>..HEAD
+git diff --name-status <base>..HEAD
+```
+
+- Use the first `git merge-base` command that succeeds to get the branch point `<base>`.
+- Then inspect the full set of files changed since that point with `git log --name-status <base>..HEAD` or `git diff --name-status <base>..HEAD`.
+- If no base ref exists, locate the first run commits using `meta.run_id` / timestamps or enumerate the branch commits with `git log --name-only` and review everything those commits touched.
+
+Consider ALL test files added or changed across the ENTIRE run, across all loop iterations.
+
+### Filtering Test Files
+
+From the branch diff, select only the test files:
+
+- files under the test directory `payload.test_dir` (default `tests/`), or
+- files matching `test_*.py` or `*_test.py`.
 
 If you cannot reliably determine which tests are new, review the most likely candidates and state the limitation in `payload.notes`.
 
@@ -197,6 +239,7 @@ Check whether they:
 - avoid tautological assertions
 - avoid meaningless coverage padding
 - are not overly brittle without reason
+- are located in the test directory (`payload.test_dir`, default `tests/`) rather than next to source files
 
 ### 2. Importance
 
@@ -261,6 +304,7 @@ Identify risks such as:
 - tests that pass for the wrong reason
 - broken tests that were not explained
 - tests that make the suite harder to maintain
+- test files placed outside the test directory (`payload.test_dir`, default `tests/`)
 
 ## Final Quality Verdict
 
@@ -582,6 +626,9 @@ Rules for the state update:
 - NEVER modify production code
 - NEVER modify test code
 - NEVER fix failing tests yourself
+- NEVER rely solely on `payload.test_files`; it only reflects the last loop iteration. Always base your review on the full branch diff
+- NEVER relocate test files yourself
+- If tests were created outside the test directory (`payload.test_dir`, default `tests/`), flag this in the report and in `payload.notes`
 - NEVER revert, delete, reset, or discard repository files
 - NEVER set `is_complete`
 - NEVER set `termination_reason`

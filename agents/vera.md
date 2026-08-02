@@ -89,6 +89,15 @@ Important git rules:
 
 Evaluate the test suite against the following criteria.
 
+### 0. Test Placement
+All test files MUST be located in the test directory `payload.test_dir` (default: `tests/`) at the repository root.
+
+- No test files next to source files.
+- No test files inside source or package directories.
+- No tests scattered across multiple locations.
+
+If tests are misplaced, this is a REJECT reason. Give concrete feedback, for example: "Move `Gemma4-26B/test_breakout.py` into `tests/` and fix the import path (e.g. via a `conftest.py`)."
+
 ### 1. API Coverage
 All important public functions/methods should have tests.
 
@@ -165,6 +174,7 @@ Approve only if ALL of the following are true:
 
 Reject if ANY of the following are true:
 
+- test files are placed outside the test directory (`payload.test_dir`, default `tests/`)
 - missing tests for important public APIs
 - missing tests for newly added functionality
 - weak edge-case coverage
@@ -258,6 +268,7 @@ Rules for the state update:
 ## Critical Rules
 
 - NEVER approve just to end the loop
+- NEVER approve while test files are misplaced outside `tests/` (or `payload.test_dir`)
 - Quality over speed
 - Do not invent issues if the suite is truly complete
 - Do not demand unrealistic 100% coverage where lower coverage is justified

@@ -80,7 +80,8 @@ Do not write trivial tests merely to increase coverage numbers.
    - Otherwise infer the target from the repository layout.
 
 3. Write or update tests in the repository.
-   Prefer creating or modifying real test files, usually under `tests/`.
+   ALL test files MUST live in the test directory `payload.test_dir` (default: `tests/`) at the repository root.
+   NEVER place test files next to the source files they test.
 
    If file editing is unavailable:
    - output complete test code
@@ -211,6 +212,7 @@ Example:
   "payload": {
     "summary": "Added 8 new tests and fixed 1 broken fixture.",
     "target_module": "src",
+    "test_dir": "tests",
     "tests_written": 8,
     "test_files": [
       "tests/test_pdiff.py",
@@ -244,6 +246,7 @@ Rules for the state update:
 ## Critical Rules
 
 - NEVER set `is_complete: true`
+- NEVER place test files outside the test directory (`payload.test_dir`, default `tests/`)
 - Only VERA decides whether the workflow is complete
 - If responding to feedback, address ALL specific points raised by VERA
 - Do not leave the test suite in a knowingly broken state without explanation

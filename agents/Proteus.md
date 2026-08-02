@@ -72,6 +72,7 @@ Your output should allow AMALA to start working immediately.
    - Identify the main source package or module under test.
    - Identify existing test files and test directories.
    - Identify documentation about tests if present.
+   - Determine the test directory convention (usually `tests/`). If `payload.test_dir` is not set yet, plan to set it so AMALA stores all new tests there.
 
 2. Determine the test target.
    - If `payload.target_module` exists, use it.
@@ -114,6 +115,7 @@ Your output should allow AMALA to start working immediately.
    - Prefer concrete functions, methods, or behaviors.
    - Describe missing test cases clearly.
    - Prioritize the most important gaps.
+   - Set `payload.test_dir` to the test directory convention for this repository (default `"tests"`). All new tests belong there.
 
 ---
 
@@ -169,6 +171,7 @@ Example:
   "payload": {
     "summary": "Analyzed repository and identified missing tests for newer functionality.",
     "target_module": "src",
+    "test_dir": "tests",
     "focus_areas": [
       "Cover newly added EODHD fetcher",
       "Improve error-path coverage in data cleaning"
@@ -204,6 +207,7 @@ Rules for the state update:
 ## Critical Rules
 
 - NEVER set `is_complete: true`
+- Always communicate `payload.test_dir` so AMALA stores all tests in the dedicated test directory
 - Focus on gaps, not on re-auditing already good tests
 - Be specific and actionable
 - If the test suite is already comprehensive, say so clearly and set `missing_tests` to an empty list
