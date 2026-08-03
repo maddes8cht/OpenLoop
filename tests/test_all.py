@@ -3246,6 +3246,124 @@ class TestLoopLogViewer:
         labels = [c.kwargs["text"] for c in calls]
         assert "System" in labels
 
+    def _boundary_xml(self):
+        return (
+            "<openloop_log>\n"
+            "<system>\n"
+            "[OpenLoop] OpenLoop run started at 2026-01-01 00:00:00\n"
+            "</system>\n"
+            "<iteration number=\"1\" max=\"1\">\n"
+            "<agent name=\"amala\" phase=\"loop\" iteration=\"1\" run_id=\"abc\">\n"
+            "<system>\n"
+            "[OpenLoop]   Agent banner\n"
+            "</system>\n"
+            "</agent>\n"
+            "</iteration>\n"
+            "<system>\n"
+            "[OpenLoop] Finished 1 loop iterations\n"
+            "</system>\n"
+            "</openloop_log>\n"
+        )
+
+    def test_insert_node_keeps_boundary_system_when_hidden(self, tmp_path):
+        from tools.looplog import LogParser, LoopLogApp
+
+        log = tmp_path / "boundary.log"
+        log.write_text(self._boundary_xml(), encoding="utf-8")
+        sections = LogParser(log).parse()
+
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = True
+        app._tree = MagicMock()
+        app._tree.insert.return_value = "node"
+        app._sec_map = {}
+
+        app._insert_node("", sections[0])
+        labels = [c.kwargs["text"] for c in app._tree.insert.call_args_list]
+        # First and last root system children stay visible…
+        assert labels.count("System") == 2
+        # …while the nested iteration/agent system tag is hidden.
+        assert any(label.startswith("Agent: amala") for label in labels)
+
+        root = sections[0]
+        assert root.children[0].tag == "system"
+        assert root.children[-1].tag == "system"
+
+    def test_insert_node_hides_mid_root_system_when_hidden(self, tmp_path):
+        from tools.looplog import LogParser, LoopLogApp
+
+        xml = (
+            "<openloop_log>\n"
+            "<system>\n"
+            "run header\n"
+            "</system>\n"
+            "<iteration number=\"1\" max=\"1\">\n"
+            "<agent name=\"amala\" phase=\"loop\" iteration=\"1\" run_id=\"abc\">\n"
+            "content\n"
+            "</agent>\n"
+            "</iteration>\n"
+            "<system>\n"
+            "mid-run root system (e.g. before finalization)\n"
+            "</system>\n"
+            "<agent name=\"dike\" phase=\"finalization\" iteration=\"1\" run_id=\"abc\">\n"
+            "content\n"
+            "</agent>\n"
+            "<system>\n"
+            "run summary\n"
+            "</system>\n"
+            "</openloop_log>\n"
+        )
+        log = tmp_path / "mid.log"
+        log.write_text(xml, encoding="utf-8")
+        sections = LogParser(log).parse()
+
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = True
+        app._tree = MagicMock()
+        app._tree.insert.return_value = "node"
+        app._sec_map = {}
+
+        app._insert_node("", sections[0])
+        labels = [c.kwargs["text"] for c in app._tree.insert.call_args_list]
+        # First and last remain; the middle root system child is hidden.
+        assert labels.count("System") == 2
+
+    def test_insert_node_boundary_system_keeps_children(self, tmp_path):
+        from tools.looplog import LogParser, LoopLogApp
+
+        log = tmp_path / "boundary.log"
+        log.write_text(self._boundary_xml(), encoding="utf-8")
+        sections = LogParser(log).parse()
+
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = True
+        app._tree = MagicMock()
+        counter = iter(range(100))
+
+        def fake_insert(*args, **kwargs):
+            return f"n{next(counter)}"
+
+        app._tree.insert.side_effect = fake_insert
+        app._sec_map = {}
+
+        app._insert_node("", sections[0])
+        # The boundary system sections are registered in _sec_map.
+        system_secs = [
+            sec for sec in app._sec_map.values() if sec.tag == "system"
+        ]
+        assert len(system_secs) == 2
+        # The first root system child precedes the iteration; the last one
+        # follows it — both are selectable in the tree.
+        iteration = sections[0].children[1]
+        assert system_secs[0].end <= iteration.start
+        assert system_secs[1].start >= iteration.end
+
     # -- Point 3: Show entire file -> jump + highlight --
 
     def test_jump_to_section_scrolls_and_highlights(self, parser):

@@ -763,13 +763,34 @@ class LoopLogApp:
         elif self.sections:
             self._display_section(self.sections[0])
 
-    def _insert_node(self, parent: str, sec: Section) -> str:
+    def _insert_node(
+        self,
+        parent: str,
+        sec: Section,
+        boundary_system_ids: Optional[set[int]] = None,
+    ) -> str:
+        """Insert a section node; ``""`` for parent means a top-level root.
+
+        ``boundary_system_ids`` is the set of direct ``system`` children of a
+        root that stay visible even with "Hide system tags" active: the first
+        (run header, before any agent) and the last (run summary). Every other
+        ``system`` section — including those nested in iterations/agents — is
+        hidden as usual.
+        """
         if self._hide_system.get() and sec.tag == "system":
-            return ""
+            if boundary_system_ids is None or id(sec) not in boundary_system_ids:
+                return ""
         node_id = self._tree.insert(parent, tk.END, text=sec.label, open=True)
         self._sec_map[node_id] = sec
+
+        child_boundary: Optional[set[int]] = None
+        if sec.tag == "openloop_log":
+            sys_children = [c for c in sec.children if c.tag == "system"]
+            if sys_children:
+                child_boundary = {id(sys_children[0]), id(sys_children[-1])}
+
         for child in sec.children:
-            self._insert_node(node_id, child)
+            self._insert_node(node_id, child, child_boundary)
         return node_id
 
     # -- Selection handling --
@@ -912,7 +933,10 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument(
         "--hide-system-tags",
         action="store_true",
-        help="activate the 'Hide system tags' checkbox at startup",
+        help=(
+            "activate the 'Hide system tags' checkbox at startup; the first "
+            "and last system section of each run root always stay visible"
+        ),
     )
     parser.add_argument(
         "--show-entire-file",
