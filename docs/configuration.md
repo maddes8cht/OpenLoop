@@ -19,6 +19,7 @@ The config file supports **JSONC** (JSON with Comments) – both `//` line comme
   "default_max_loops": 10,
   "workdir": "/path/to/project",
   "init_script": "conda activate myenv",
+  "resume_reasons": ["stopped", "max_loops_reached", "agent_error", "timeout", "missing_state"],
   "opencode_defaults": {
     "model": "anthropic/claude-sonnet-4",
     "agent": "plan",
@@ -41,7 +42,19 @@ The config file supports **JSONC** (JSON with Comments) – both `//` line comme
 | `init_script` | string / null | `null` | Script or command to run before each opencode invocation |
 | `log_dir` | string | `".openloop"` | Directory for log files and prompt files. Can be overridden per workflow or via `--log-dir` CLI flag. |
 | `no_log_file` | boolean | `false` | If `true`, disables file logging entirely. |
+| `resume_reasons` | array / null | `null` | Termination-reason prefixes that allow a run to be resumed (see below) |
 | `opencode_defaults` | object | `{}` | Default flags for every `opencode run` invocation (see below) |
+
+### `resume_reasons` (resuming interrupted runs)
+
+When a run stops abnormally (max loops reached, agent error, timeout, stop, missing state), OpenLoop writes a **checkpoint** file next to the run's log file (`openloop-run-*.json`). The run can later be continued with `--resume` (CLI) or the **Continue** button (GUI).
+
+`resume_reasons` controls which terminations are resumable:
+
+- `null` (default): resumable for **every** reason except `"completed"`.
+- A list of prefixes matched against the termination reason, e.g. `["agent_error", "timeout"]` allows `"agent_error:a"` and `"timeout:a:600"` but not `"stopped"`.
+
+The checkpoint is deleted automatically when a run completes successfully.
 
 ### `opencode_defaults` fields
 

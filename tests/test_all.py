@@ -266,6 +266,58 @@ class TestConfig:
         finally:
             os.chdir(old_cwd)
 
+    def test_resume_reasons_default_none(self):
+        from core.config import Config
+
+        c = Config()
+        assert c.resume_reasons is None
+        assert c.allows_resume("agent_error:a") is True
+        assert c.allows_resume("timeout:a:600") is True
+        assert c.allows_resume("max_loops_reached") is True
+        assert c.allows_resume("stopped") is True
+        assert c.allows_resume("completed") is False
+        assert c.allows_resume("") is False
+
+    def test_resume_reasons_loaded_from_file(self, tmp_path):
+        from core.config import Config
+
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(
+            json.dumps({"resume_reasons": ["stopped", "max_loops_reached"]})
+        )
+        c = Config._from_file(str(cfg_file))
+        assert c.resume_reasons == ["stopped", "max_loops_reached"]
+        assert c.allows_resume("stopped") is True
+        assert c.allows_resume("max_loops_reached") is True
+        assert c.allows_resume("agent_error:a") is False
+        assert c.allows_resume("timeout:a:600") is False
+
+    def test_resume_reasons_prefix_matching(self):
+        from core.config import Config
+
+        c = Config(resume_reasons=["agent_error", "timeout"])
+        assert c.allows_resume("agent_error:a") is True
+        assert c.allows_resume("timeout:a:600") is True
+        assert c.allows_resume("missing_state:a") is False
+        assert c.allows_resume("agent_error_blocked:a") is True
+        assert c.allows_resume("x-agent_error:a") is False
+
+    def test_resume_reasons_empty_list_is_none(self, tmp_path):
+        from core.config import Config
+
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({"resume_reasons": []}))
+        c = Config._from_file(str(cfg_file))
+        assert c.resume_reasons is None
+
+    def test_resume_reasons_non_list_raises(self, tmp_path):
+        from core.config import Config
+
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({"resume_reasons": "stopped"}))
+        with pytest.raises(ValueError, match="resume_reasons must be a list"):
+            Config._from_file(str(cfg_file))
+
 
 # ===========================================================================
 # core.parser — StateParser
@@ -615,6 +667,21 @@ class TestOpenCodeRunner:
             assert result.success is False
             assert "timed out" in result.error
             assert result.exit_code == -1
+            assert result.timed_out is True
+
+    def test_run_no_timeout_flag(self):
+        from core.runner import OpenCodeRunner
+
+        with patch("subprocess.run") as mock_run:
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = "ok"
+            mock_proc.stderr = ""
+            mock_run.return_value = mock_proc
+
+            r = OpenCodeRunner(timeout=600)
+            result = r.run("prompt")
+            assert result.timed_out is False
 
     def test_run_file_not_found(self):
         from core.runner import OpenCodeRunner
@@ -1009,6 +1076,74 @@ class TestWorkflowConfig:
         wf.write_text('["list"]')
         with pytest.raises(ValueError, match="must contain a JSON object"):
             WorkflowConfig.load(str(wf))
+
+
+# ===========================================================================
+# core.checkpoint — CheckpointData
+# ===========================================================================
+
+
+class TestCheckpoint:
+    def test_roundtrip(self, tmp_path):
+        from core.checkpoint import CheckpointData
+
+        ck = CheckpointData(
+            workflow={"loop_agents": ["a"], "max_loops": 5},
+            state={"is_complete": False, "iteration": 2, "payload": {"n": 1}},
+            position={"phase": "loop", "iteration": 2, "agent_index": 1},
+            run_id="run-123",
+            created_at="2026-01-01T00:00:00",
+            log_path=str(tmp_path / "run.log"),
+        )
+        path = ck.save(tmp_path / "run.json")
+        assert path.is_file()
+        assert not (tmp_path / ".run.json.tmp").exists()  # atomic tmp removed
+
+        loaded = CheckpointData.load(path)
+        assert loaded is not None
+        assert loaded.workflow["loop_agents"] == ["a"]
+        assert loaded.position["agent_index"] == 1
+        assert loaded.run_id == "run-123"
+        assert loaded.log_path == str(tmp_path / "run.log")
+
+    def test_load_missing_returns_none(self, tmp_path):
+        from core.checkpoint import CheckpointData
+
+        assert CheckpointData.load(tmp_path / "nope.json") is None
+
+    def test_load_invalid_json_returns_none(self, tmp_path):
+        from core.checkpoint import CheckpointData
+
+        bad = tmp_path / "bad.json"
+        bad.write_text("not json")
+        assert CheckpointData.load(bad) is None
+
+    def test_load_non_dict_returns_none(self, tmp_path):
+        from core.checkpoint import CheckpointData
+
+        bad = tmp_path / "bad.json"
+        bad.write_text('[1, 2, 3]')
+        assert CheckpointData.load(bad) is None
+
+    def test_checkpoint_path_for_log(self, tmp_path):
+        from core.checkpoint import checkpoint_path_for
+
+        log = tmp_path / "openloop-run-demo-20260101-120000.log"
+        assert checkpoint_path_for(log) == tmp_path / "openloop-run-demo-20260101-120000.json"
+
+    def test_checkpoint_path_for_json_passthrough(self, tmp_path):
+        from core.checkpoint import checkpoint_path_for
+
+        ck = tmp_path / "openloop-run-demo-20260101-120000.json"
+        assert checkpoint_path_for(ck) == ck
+
+    def test_save_creates_parent_dir(self, tmp_path):
+        from core.checkpoint import CheckpointData
+
+        nested = tmp_path / "a" / "b" / "run.json"
+        ck = CheckpointData(workflow={"loop_agents": ["a"]})
+        ck.save(nested)
+        assert nested.is_file()
 
 
 class TestExecutionEngine:
@@ -1890,6 +2025,328 @@ class TestExecutionEngine:
         assert "Set is_complete=false." in prompt
         assert "is_complete=true" not in prompt
 
+    # -- resume / checkpointing (#47) --
+
+    def test_checkpoint_written_after_each_agent(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine(log_dir=str(tmp_path))
+        engine.runner = self._make_mock_runner(
+            [
+                {"success": True, "output": '<state_update>{"is_complete": false}</state_update>'},
+                {"success": False, "output": ""},
+            ]
+        )
+        engine.agent_loader = self._make_mock_agent_loader({"a": "A", "b": "B"})
+        state = engine.execute_workflow_data(
+            {
+                "loop_agents": ["a", "b"],
+                "max_loops": 5,
+                "end_state_condition": "is_complete == True",
+            }
+        )
+        assert state.termination_reason == "agent_error:b"
+
+        from core.checkpoint import CheckpointData
+
+        ck = CheckpointData.load(engine._checkpoint_path)
+        assert ck is not None
+        assert ck.position == {"phase": "loop", "iteration": 1, "agent_index": 0}
+        assert ck.state["termination_reason"] == "agent_error:b"
+        assert ck.workflow["loop_agents"] == ["a", "b"]
+        assert ck.run_id
+
+    def test_checkpoint_deleted_on_completion(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine(log_dir=str(tmp_path))
+        engine.runner = self._make_mock_runner(
+            [
+                {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+            ]
+        )
+        engine.agent_loader = self._make_mock_agent_loader({"a": "A"})
+        engine.execute_workflow_data(
+            {
+                "loop_agents": ["a"],
+                "max_loops": 5,
+                "end_state_condition": "is_complete == True",
+            }
+        )
+        assert engine._checkpoint_path is None or not engine._checkpoint_path.exists()
+
+    def test_resume_continues_after_failed_agent(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        def run_engine():
+            engine = ExecutionEngine(log_dir=str(tmp_path))
+            engine.runner = self._make_mock_runner(
+                [
+                    {"success": True, "output": '<state_update>{"payload": {"step": 1}}</state_update>'},
+                    {"success": False, "output": ""},
+                ]
+            )
+            engine.agent_loader = self._make_mock_agent_loader({"a": "A", "b": "B"})
+            state = engine.execute_workflow_data(
+                {
+                    "loop_agents": ["a", "b"],
+                    "max_loops": 5,
+                    "end_state_condition": "is_complete == True",
+                }
+            )
+            assert state.termination_reason == "agent_error:b"
+            return engine._checkpoint_path
+
+        checkpoint = run_engine()
+
+        engine2 = ExecutionEngine(log_dir=str(tmp_path))
+        engine2.runner = self._make_mock_runner(
+            [
+                {"success": True, "output": '<state_update>{"is_complete": true, "payload": {"step": 2}}</state_update>'},
+            ]
+        )
+        engine2.agent_loader = self._make_mock_agent_loader({"a": "A", "b": "B"})
+        state2 = engine2.execute_resume(checkpoint)
+        assert state2.termination_reason == "completed"
+        assert state2.iteration == 1  # NOT re-incremented mid-iteration
+        assert state2.payload.get("step") == 2
+        assert not checkpoint.exists()  # removed after completion
+
+    def test_resume_timeout_reason(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine(log_dir=str(tmp_path))
+        engine.config = type("C", (), dict(
+            allows_resume=lambda self, r: r != "completed",
+            log_dir=str(tmp_path),
+            workdir=None,
+            init_script=None,
+            opencode_defaults=type("O", (), {"merge": lambda self, o: o})(),
+            default_timeout=30,
+        ))()
+
+        calls = {"n": 0}
+
+        def side_effect(prompt, **kw):
+            calls["n"] += 1
+            return type("R", (), {
+                "success": False, "output": "", "error": "timeout",
+                "exit_code": -1, "timed_out": True,
+            })()
+
+        engine.runner = MagicMock()
+        engine.runner.run.side_effect = side_effect
+        engine.agent_loader = self._make_mock_agent_loader({"a": "A"})
+        engine._timeout = 30
+
+        state = engine.execute_workflow_data(
+            {
+                "loop_agents": ["a"],
+                "max_loops": 5,
+                "end_state_condition": "is_complete == True",
+            }
+        )
+        assert state.termination_reason == "timeout:a:30"
+
+    def test_resume_max_loops_override(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        def run_engine():
+            engine = ExecutionEngine(log_dir=str(tmp_path))
+            engine.runner = self._make_mock_runner(
+                [{"success": True, "output": '<state_update>{"is_complete": false}</state_update>'}]
+            )
+            engine.agent_loader = self._make_mock_agent_loader({"a": "A"})
+            state = engine.execute_workflow_data(
+                {
+                    "loop_agents": ["a"],
+                    "max_loops": 2,
+                    "end_state_condition": "is_complete == True",
+                }
+            )
+            assert state.termination_reason == "max_loops_reached"
+            return engine._checkpoint_path
+
+        checkpoint = run_engine()
+
+        engine2 = ExecutionEngine(log_dir=str(tmp_path))
+        engine2.runner = self._make_mock_runner(
+            [
+                {"success": True, "output": '<state_update>{"is_complete": false}</state_update>'},
+                {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+            ]
+        )
+        engine2.agent_loader = self._make_mock_agent_loader({"a": "A"})
+        state2 = engine2.execute_resume(checkpoint, max_loops_override=5)
+        assert state2.termination_reason == "completed"
+        assert state2.iteration == 4
+
+    def test_resume_preparation_phase(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        def run_engine():
+            engine = ExecutionEngine(log_dir=str(tmp_path))
+            engine.runner = self._make_mock_runner(
+                [
+                    {"success": True, "output": '<state_update>{"payload": {"prepped": true}}</state_update>'},
+                    {"success": False, "output": ""},
+                ]
+            )
+            engine.agent_loader = self._make_mock_agent_loader({"p1": "P", "p2": "P"})
+            state = engine.execute_workflow_data(
+                {
+                    "preparation_agents": ["p1", "p2"],
+                    "loop_agents": ["a"],
+                    "max_loops": 3,
+                    "end_state_condition": "is_complete == True",
+                }
+            )
+            assert state.termination_reason == "agent_error:p2"
+            return engine._checkpoint_path
+
+        checkpoint = run_engine()
+
+        engine2 = ExecutionEngine(log_dir=str(tmp_path))
+        engine2.runner = self._make_mock_runner(
+            [
+                {"success": True, "output": '<state_update>{"is_complete": false}</state_update>'},
+                {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+            ]
+        )
+        engine2.agent_loader = self._make_mock_agent_loader({"p1": "P", "p2": "P", "a": "A"})
+        state2 = engine2.execute_resume(checkpoint)
+        assert state2.termination_reason == "completed"
+        assert state2.payload.get("prepped") is True
+
+    def test_resume_finalization_phase(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        def run_engine():
+            engine = ExecutionEngine(log_dir=str(tmp_path))
+            engine.runner = self._make_mock_runner(
+                [
+                    {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+                    {"success": True, "output": '<state_update>{"payload": {"finalized": 1}}</state_update>'},
+                    {"success": False, "output": ""},
+                ]
+            )
+            engine.agent_loader = self._make_mock_agent_loader({"a": "A", "f1": "F", "f2": "F"})
+            state = engine.execute_workflow_data(
+                {
+                    "loop_agents": ["a"],
+                    "finalization_agents": ["f1", "f2"],
+                    "max_loops": 3,
+                    "end_state_condition": "is_complete == True",
+                }
+            )
+            assert state.termination_reason == "agent_error:f2"
+            assert engine._checkpoint_path.exists()
+            return engine._checkpoint_path
+
+        checkpoint = run_engine()
+
+        engine2 = ExecutionEngine(log_dir=str(tmp_path))
+        engine2.runner = self._make_mock_runner(
+            [
+                {"success": True, "output": '<state_update>{"payload": {"finalized": 2}}</state_update>'},
+            ]
+        )
+        engine2.agent_loader = self._make_mock_agent_loader({"a": "A", "f1": "F", "f2": "F"})
+        state2 = engine2.execute_resume(checkpoint)
+        assert state2.termination_reason == "completed"
+        assert state2.payload.get("finalized") == 2
+        assert not checkpoint.exists()
+
+    def test_resume_after_first_agent_fails(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine(log_dir=str(tmp_path))
+        engine.runner = self._make_mock_runner(
+            [{"success": False, "output": ""}]
+        )
+        engine.agent_loader = self._make_mock_agent_loader({"a": "A"})
+        state = engine.execute_workflow_data(
+            {
+                "loop_agents": ["a"],
+                "max_loops": 3,
+                "end_state_condition": "is_complete == True",
+            }
+        )
+        assert state.termination_reason == "agent_error:a"
+        assert engine._checkpoint_path.exists()
+
+        engine2 = ExecutionEngine(log_dir=str(tmp_path))
+        engine2.runner = self._make_mock_runner(
+            [{"success": True, "output": '<state_update>{"is_complete": true}</state_update>'}]
+        )
+        engine2.agent_loader = self._make_mock_agent_loader({"a": "A"})
+        state2 = engine2.execute_resume(engine._checkpoint_path)
+        assert state2.termination_reason == "completed"
+        assert state2.is_complete is True
+        assert engine2.runner.run.call_count == 1
+
+    def test_resume_blocked_by_reason_filter(self, tmp_path):
+        from core.engine import ExecutionEngine
+        from core.config import Config
+
+        cfg = Config(log_dir=str(tmp_path), resume_reasons=["stopped"])
+        engine = ExecutionEngine(config=cfg, log_dir=str(tmp_path))
+        engine.runner = self._make_mock_runner([{"success": False, "output": ""}])
+        engine.agent_loader = self._make_mock_agent_loader({"a": "A"})
+        engine.execute_workflow_data(
+            {
+                "loop_agents": ["a"],
+                "max_loops": 5,
+                "end_state_condition": "is_complete == True",
+            }
+        )
+        with pytest.raises(ValueError, match="not allowed"):
+            engine.execute_resume(engine._checkpoint_path)
+
+    def test_resume_missing_checkpoint_raises(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine(log_dir=str(tmp_path))
+        with pytest.raises(FileNotFoundError):
+            engine.execute_resume(tmp_path / "missing.json")
+
+    def test_log_continuation_two_roots(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        def run_engine():
+            engine = ExecutionEngine(log_dir=str(tmp_path))
+            engine.runner = self._make_mock_runner(
+                [
+                    {"success": True, "output": '<state_update>{"is_complete": false}</state_update>'},
+                    {"success": False, "output": ""},
+                ]
+            )
+            engine.agent_loader = self._make_mock_agent_loader({"a": "A", "b": "B"})
+            engine.execute_workflow_data(
+                {
+                    "loop_agents": ["a", "b"],
+                    "max_loops": 5,
+                    "end_state_condition": "is_complete == True",
+                }
+            )
+            log_path = engine._log_path
+            checkpoint = engine._checkpoint_path
+            return log_path, checkpoint
+
+        log_path, checkpoint = run_engine()
+
+        engine2 = ExecutionEngine(log_dir=str(tmp_path))
+        engine2.runner = self._make_mock_runner(
+            [{"success": True, "output": '<state_update>{"is_complete": true}</state_update>'}]
+        )
+        engine2.agent_loader = self._make_mock_agent_loader({"a": "A", "b": "B"})
+        engine2.execute_resume(checkpoint)
+
+        text = log_path.read_text(encoding="utf-8")
+        assert text.count("<openloop_log>") == 2
+        assert text.count("</openloop_log>") == 2
+        assert "# OPENLOOP RESUMED" in text
+
     # -- helpers --
 
     @staticmethod
@@ -2016,6 +2473,68 @@ class TestOpenLoopEntryPoint:
         ):
             main(["--cli", "--workflow", str(wf)])
         assert exc.value.code == 1
+
+    def test_parse_args_resume(self):
+        from openloop import parse_args
+
+        args = parse_args(["--cli", "--resume", "openloop-run-x.log"])
+        assert args.resume == "openloop-run-x.log"
+        assert args.workflow is None
+
+    def test_parse_args_max_loops(self):
+        from openloop import parse_args
+
+        args = parse_args(["--cli", "--workflow", "w.json", "--max-loops", "25"])
+        assert args.max_loops == 25
+
+    def test_parse_args_max_loops_default_none(self):
+        from openloop import parse_args
+
+        assert parse_args([]).max_loops is None
+
+    def test_main_cli_without_workflow_or_resume_exits(self):
+        from openloop import main
+
+        with pytest.raises(SystemExit) as exc:
+            main(["--cli"])
+        assert exc.value.code == 1
+
+    def test_main_cli_workflow_and_resume_mutually_exclusive(self, tmp_path):
+        from openloop import main
+
+        wf = tmp_path / "test.json"
+        wf.write_text(json.dumps({"loop_agents": ["a"]}))
+        ck = tmp_path / "run.json"
+        ck.write_text(json.dumps({"schema": 1}))
+
+        with pytest.raises(SystemExit) as exc:
+            main(["--cli", "--workflow", str(wf), "--resume", str(ck)])
+        assert exc.value.code == 1
+
+    def test_main_cli_resume_completed(self, tmp_path):
+        from openloop import main
+
+        ck = tmp_path / "run.json"
+        ck.write_text(json.dumps({"schema": 1}))
+
+        mock_config = MagicMock()
+        mock_engine = MagicMock()
+        mock_state = MagicMock()
+        mock_state.termination_reason = "completed"
+        mock_state.iteration = 4
+        mock_state.is_complete = True
+        mock_engine.state = mock_state
+
+        with (
+            patch("core.config.Config.load", return_value=mock_config),
+            patch("core.engine.ExecutionEngine", return_value=mock_engine),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["--cli", "--resume", str(ck), "--max-loops", "20"])
+        assert exc.value.code == 0
+        mock_engine.execute_resume.assert_called_once_with(
+            tmp_path / "run.json", max_loops_override=20
+        )
 
     def test_main_gui_mode(self):
         from openloop import main

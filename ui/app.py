@@ -27,6 +27,7 @@ from tkinter import (
     StringVar,
     Text,
     Tk,
+    Toplevel,
     filedialog,
     messagebox,
     ttk,
@@ -188,6 +189,7 @@ class WorkflowApp:
         self._cli_log_file = log_file
         self._cli_log_dir = log_dir
         self._cli_timeout = timeout
+        self._resume_checkpoint_path: Optional[Path] = None
 
         self._build_ui()
         self._root.after_idle(self._init_preview_collapsed)
@@ -251,6 +253,13 @@ class WorkflowApp:
             state="disabled",
         )
         self._stop_btn.pack(side=LEFT, padx=2)
+        self._continue_btn = Button(
+            toolbar,
+            text="Continue",
+            command=self._continue_execution,
+            state="disabled",
+        )
+        self._continue_btn.pack(side=LEFT, padx=2)
         self._open_viewer_btn = Button(
             toolbar,
             text="LoopLog",
@@ -1035,27 +1044,8 @@ class WorkflowApp:
             return
 
         try:
-            from core.config import Config
-            from core.engine import ExecutionEngine
-
-            cfg = self._config if isinstance(self._config, Config) else Config()
-            cfg.log_dir = self._log_dir_var.get().strip() or ".openloop"
-            no_log = self._no_log_file_var.get() or self._cli_no_log_file
-            raw_timeout = self._timeout_var.get().strip()
-            gui_timeout = int(raw_timeout) if raw_timeout else None
-            timeout = self._cli_timeout if self._cli_timeout is not None else gui_timeout
-            self._stop_event.clear()
             self._current_max_loops = int(data.get("max_loops", 10))
-            self._engine = ExecutionEngine(
-                config=cfg, logger=self._log, stop_event=self._stop_event,
-                no_log_file=no_log, log_file=self._cli_log_file,
-                log_dir=self._cli_log_dir,
-                timeout=timeout,
-                state_callback=lambda s: self._log_queue.put(("state", s)),
-                log_path_callback=lambda p: self._log_queue.put(
-                    ("log_path", str(p))
-                ),
-            )
+            self._engine = self._make_engine()
         except ImportError as exc:
             messagebox.showerror("Error", f"Missing core module: {exc}")
             return
@@ -1088,6 +1078,209 @@ class WorkflowApp:
             daemon=True,
         )
         self._execution_thread.start()
+
+    def _make_engine(self):
+        """Build an ExecutionEngine wired to the GUI log/state callbacks."""
+        from core.config import Config
+        from core.engine import ExecutionEngine
+
+        cfg = self._config if isinstance(self._config, Config) else Config()
+        cfg.log_dir = self._log_dir_var.get().strip() or ".openloop"
+        no_log = self._no_log_file_var.get() or self._cli_no_log_file
+        raw_timeout = self._timeout_var.get().strip()
+        gui_timeout = int(raw_timeout) if raw_timeout else None
+        timeout = self._cli_timeout if self._cli_timeout is not None else gui_timeout
+        self._stop_event.clear()
+        return ExecutionEngine(
+            config=cfg, logger=self._log, stop_event=self._stop_event,
+            no_log_file=no_log, log_file=self._cli_log_file,
+            log_dir=self._cli_log_dir,
+            timeout=timeout,
+            state_callback=lambda s: self._log_queue.put(("state", s)),
+            log_path_callback=lambda p: self._log_queue.put(
+                ("log_path", str(p))
+            ),
+        )
+
+    def _is_resumable(self, checkpoint_path) -> bool:
+        """Whether a checkpoint may be resumed per the resume_reasons filter."""
+        from core.config import Config
+        from core.checkpoint import CheckpointData
+
+        cfg = self._config if isinstance(self._config, Config) else Config()
+        ck = CheckpointData.load(checkpoint_path)
+        if ck is None:
+            return False
+        reason = str(ck.state.get("termination_reason", ""))
+        return cfg.allows_resume(reason)
+
+    # ---- Resume / Continue (#47) ----
+
+    def _continue_execution(self) -> None:
+        if self._running:
+            return
+
+        from core.checkpoint import CheckpointData
+
+        path = self._pick_resume_file()
+        if path is None:
+            return
+
+        checkpoint = CheckpointData.load(path)
+        if checkpoint is None:
+            messagebox.showerror(
+                "Continue", f"Invalid or unreadable checkpoint:\n{path}"
+            )
+            return
+
+        reason = checkpoint.state.get("termination_reason", "")
+
+        try:
+            self._current_max_loops = int(
+                checkpoint.workflow.get("max_loops", 10)
+            )
+        except (TypeError, ValueError):
+            self._current_max_loops = 10
+
+        self._engine = self._make_engine()
+
+        self._log_text.configure(state="normal")
+        self._log_text.delete("1.0", END)
+        self._log_text.configure(state="disabled")
+        self._reset_state_display()
+
+        while True:
+            try:
+                self._log_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        self._running = True
+        self._start_btn.configure(state="disabled")
+        self._stop_btn.configure(state="normal")
+        self._continue_btn.configure(state="disabled")
+        self._viewer_launched = False
+        self._active_log_path = None
+        self._open_viewer_btn.configure(state="disabled")
+
+        self._log(f"--- Resuming run {checkpoint.run_id} ---")
+        self._log(f"  Previous termination: {reason}")
+        self._execution_thread = threading.Thread(
+            target=self._run_resume_engine,
+            args=(path,),
+            daemon=True,
+        )
+        self._execution_thread.start()
+
+    def _run_resume_engine(self, checkpoint_path) -> None:
+        try:
+            self._engine.execute_resume(checkpoint_path)
+            state = self._engine.state
+            self._log(
+                f"--- Execution finished: {state.termination_reason} ---"
+            )
+            self._log(
+                f"  Iterations: {state.iteration}, "
+                f"Complete: {state.is_complete}"
+            )
+        except Exception as exc:
+            self._log(f"Execution error: {exc}")
+        finally:
+            self._log_queue.put(("__done__", None))
+
+    def _pick_resume_file(self) -> Optional[Path]:
+        """Modal dialog listing resumable checkpoints in the log dir.
+
+        Returns the chosen checkpoint path, or None when cancelled.
+        """
+        from core.checkpoint import checkpoint_path_for
+
+        log_dir = self._log_dir_var.get().strip() or ".openloop"
+        p = Path(log_dir)
+        if not p.is_absolute():
+            wd = self._workdir_var.get().strip()
+            if wd:
+                p = Path(wd) / log_dir
+
+        candidates: list[Path] = []
+        if p.is_dir():
+            candidates = [
+                c for c in sorted(p.glob("openloop-run-*.json"))
+                if self._is_resumable(c)
+            ]
+
+        # Also accept an explicit log file picked by the user.
+        if not candidates:
+            answer = messagebox.askyesno(
+                "Continue",
+                "No checkpoints found in the log directory.\n\n"
+                "Pick an OpenLoop log file instead?",
+            )
+            if not answer:
+                return None
+            path = filedialog.askopenfilename(
+                title="Select OpenLoop Log to Resume",
+                filetypes=[
+                    ("OpenLoop logs", "*.log"),
+                    ("Checkpoints", "*.json"),
+                    ("All files", "*.*"),
+                ],
+                initialdir=str(p) if p.is_dir() else None,
+            )
+            if not path:
+                return None
+            return checkpoint_path_for(path)
+
+        if len(candidates) == 1:
+            return candidates[0]
+
+        dialog = Toplevel(self._root)
+        dialog.title("Resume Run")
+        dialog.geometry("520x320")
+        dialog.transient(self._root)
+        dialog.grab_set()
+
+        Label(dialog, text="Select a run to continue:").pack(
+            anchor=W, padx=8, pady=(8, 2)
+        )
+        listbox = Listbox(dialog, width=70, height=12)
+        listbox.pack(fill="both", expand=True, padx=8, pady=4)
+
+        default_idx = 0
+        for i, c in enumerate(candidates):
+            try:
+                ck = CheckpointData.load(c)
+                label = (
+                    f"{c.name}  [{ck.run_id[:8] or '?'} | "
+                    f"{ck.state.get('termination_reason', '?')}]"
+                )
+            except Exception:
+                label = c.name
+            if c == self._resume_checkpoint_path:
+                default_idx = i
+            listbox.insert(END, label)
+        listbox.selection_set(default_idx)
+
+        result: dict = {"path": None}
+        btn_frame = Frame(dialog)
+        btn_frame.pack(fill="x", padx=8, pady=(0, 8))
+
+        def _ok():
+            sel = listbox.curselection()
+            if sel:
+                result["path"] = candidates[sel[0]]
+            dialog.destroy()
+
+        def _cancel():
+            dialog.destroy()
+
+        Button(btn_frame, text="Continue", command=_ok).pack(side=LEFT)
+        Button(btn_frame, text="Cancel", command=_cancel).pack(
+            side=LEFT, padx=4
+        )
+        listbox.bind("<Double-Button-1>", lambda e: _ok())
+        dialog.wait_window()
+        return result["path"]
 
     def _run_engine(self, workflow_data: dict) -> None:
         try:
@@ -1154,6 +1347,19 @@ class WorkflowApp:
         self._stop_btn.configure(state="disabled")
         # Show final state in the status dot as idle
         self._status_dot.configure(fg="gray")
+
+        # Enable Continue when a resumable checkpoint was left behind (#47)
+        continue_btn = getattr(self, "_continue_btn", None)
+        if continue_btn is not None:
+            self._resume_checkpoint_path = None
+            continue_btn.configure(state="disabled")
+            if self._engine is not None and self._active_log_path is not None:
+                from core.checkpoint import checkpoint_path_for
+
+                cp = checkpoint_path_for(self._active_log_path)
+                if cp.exists() and self._is_resumable(cp):
+                    self._resume_checkpoint_path = cp
+                    continue_btn.configure(state="normal")
 
     # ---- State Display (Live) ----
 

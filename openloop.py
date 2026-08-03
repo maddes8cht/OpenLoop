@@ -19,6 +19,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Path to workflow JSON file (pre-loads in GUI, executes in CLI mode)",
     )
     parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Resume an interrupted run from a log or checkpoint .json file "
+             "(CLI mode; mutually exclusive with --workflow)",
+    )
+    parser.add_argument(
+        "--max-loops",
+        type=int,
+        dest="max_loops",
+        default=None,
+        help="Override max_loops for the run (e.g. to continue past max_loops_reached)",
+    )
+    parser.add_argument(
         "--workdir",
         type=str,
         default=None,
@@ -106,39 +120,23 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _run_cli(args: argparse.Namespace, config) -> None:
-    if not args.workflow:
-        print("Error: --workflow is required in CLI mode")
+    if not args.workflow and not args.resume:
+        print("Error: --workflow or --resume is required in CLI mode")
+        sys.exit(1)
+
+    if args.workflow and args.resume:
+        print("Error: --workflow and --resume are mutually exclusive")
         sys.exit(1)
 
     try:
         from json import loads as json_loads
         from pathlib import Path
+        from core.checkpoint import checkpoint_path_for
         from core.config import Config
         from core.engine import ExecutionEngine
         from core.runner import OpenCodeOptions
 
         cfg = config if isinstance(config, Config) else Config.load(args.config)
-        data = json_loads(Path(args.workflow).read_text(encoding="utf-8"))
-
-        if args.workdir:
-            data["workdir"] = str(Path(args.workdir).resolve())
-        if args.init_script:
-            data["init_script"] = args.init_script
-        if args.log_dir:
-            data["log_dir"] = args.log_dir
-        if args.opencode_defaults:
-            try:
-                raw = json_loads(args.opencode_defaults)
-                if isinstance(raw, dict):
-                    data.setdefault("opencode_defaults", {})
-                    existing = data["opencode_defaults"]
-                    if isinstance(existing, dict):
-                        existing.update(raw)
-                    else:
-                        data["opencode_defaults"] = raw
-            except ValueError as exc:
-                print(f"Error: Invalid --opencode-defaults JSON: {exc}")
-                sys.exit(1)
 
         engine = ExecutionEngine(
             config=cfg,
@@ -148,7 +146,38 @@ def _run_cli(args: argparse.Namespace, config) -> None:
             log_dir=args.log_dir,
             timeout=args.timeout,
         )
-        engine.execute_workflow_data(data)
+
+        if args.resume:
+            engine.execute_resume(
+                checkpoint_path_for(args.resume),
+                max_loops_override=args.max_loops,
+            )
+        else:
+            data = json_loads(Path(args.workflow).read_text(encoding="utf-8"))
+
+            if args.max_loops is not None:
+                data["max_loops"] = args.max_loops
+            if args.workdir:
+                data["workdir"] = str(Path(args.workdir).resolve())
+            if args.init_script:
+                data["init_script"] = args.init_script
+            if args.log_dir:
+                data["log_dir"] = args.log_dir
+            if args.opencode_defaults:
+                try:
+                    raw = json_loads(args.opencode_defaults)
+                    if isinstance(raw, dict):
+                        data.setdefault("opencode_defaults", {})
+                        existing = data["opencode_defaults"]
+                        if isinstance(existing, dict):
+                            existing.update(raw)
+                        else:
+                            data["opencode_defaults"] = raw
+                except ValueError as exc:
+                    print(f"Error: Invalid --opencode-defaults JSON: {exc}")
+                    sys.exit(1)
+
+            engine.execute_workflow_data(data)
 
         state = engine.state
         print(f"\nWorkflow finished: {state.termination_reason}")

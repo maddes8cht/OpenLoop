@@ -38,5 +38,10 @@
 
     // Run without external plugins (MCP servers / skills)
     // "pure": false
-  }
+  },
+
+  // Which termination reasons allow the run to be resumed via --resume / GUI Continue.
+  // Each entry is a prefix matched against the reason, e.g. "agent_error" matches
+  // "agent_error:a". Unset (null) = resumable for every reason except "completed".
+  // "resume_reasons": ["stopped", "max_loops_reached", "agent_error", "timeout", "missing_state"]
 }

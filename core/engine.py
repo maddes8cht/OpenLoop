@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from core.agent import AgentDefinition, AgentLoader
+from core.checkpoint import CheckpointData, checkpoint_path_for
 from core.config import Config, strip_jsonc
 from core.parser import StateParser
 from core.runner import OpenCodeOptions, OpenCodeRunner, RunResult
@@ -254,6 +255,13 @@ class ExecutionEngine:
 
         self._missing_state_handler = missing_state_handler
 
+        # Resume support (#47)
+        self._resuming = False
+        self._resume_position: dict = {}
+        self._checkpoint_path: Optional[Path] = None
+        self._workflow_dict: dict = {}
+        self._last_position: dict = {}
+
     # ---- File logging ----
 
     def _init_log(
@@ -291,12 +299,51 @@ class ExecutionEngine:
         self._log_handle = self._log_path.open("w", encoding="utf-8")
         self._system_open = False
 
+        # Checkpoints live next to the log with a swapped extension. A fresh
+        # run always starts checkpoint-free so a stale checkpoint from a
+        # previous run using the same explicit log file cannot be resumed.
+        self._checkpoint_path = checkpoint_path_for(self._log_path)
+        if not self._resuming:
+            self._delete_checkpoint()
+
         self._write_log("<openloop_log>\n")
         self._start_time = datetime.now()
         self._log_system(
             f"OpenLoop run started at "
             f"{self._start_time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
+
+        if self._log_path_callback:
+            self._log_path_callback(self._log_path)
+
+    def _init_log_resume(self, log_path: Path) -> None:
+        """Open an existing log in append mode for a resumed run.
+
+        The continuation is written as a second ``<openloop_log>`` root so
+        the LoopLog viewer renders the original run and the resumed portion
+        as two top-level sections. A ``# OPENLOOP RESUMED`` marker line makes
+        the boundary greppable in the raw file.
+        """
+        if self._no_log_file:
+            return
+
+        self._log_path = Path(log_path)
+        self._log_dir = self._log_path.parent
+        self._checkpoint_path = checkpoint_path_for(self._log_path)
+
+        self._log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._log_handle = self._log_path.open("a", encoding="utf-8")
+        self._system_open = False
+
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._write_log(
+            f"# OPENLOOP RESUMED at {ts} "
+            f"(run_id: {self._get_run_id()}, "
+            f"reason: {self.state.termination_reason})\n"
+        )
+        self._write_log("<openloop_log>\n")
+        self._start_time = datetime.now()
+        self._log_system(f"OpenLoop run resumed at {ts}")
 
         if self._log_path_callback:
             self._log_path_callback(self._log_path)
@@ -346,6 +393,81 @@ class ExecutionEngine:
         minutes, seconds = divmod(rem, 60)
         return f"{hours}:{minutes:02d}:{seconds:02d}"
 
+    # ---- Checkpointing (#47) ----
+
+    def _write_checkpoint(
+        self, workflow: "WorkflowConfig", phase: str, agent_index: int
+    ) -> None:
+        """Persist a checkpoint after a completed agent boundary."""
+        if not self._checkpoint_path:
+            return
+
+        self._workflow_dict = workflow.to_dict()
+        self._last_position = {
+            "phase": phase,
+            "iteration": self.state.iteration,
+            "agent_index": agent_index,
+        }
+
+        checkpoint = CheckpointData(
+            workflow=self._workflow_dict,
+            state=asdict(self.state),
+            position=dict(self._last_position),
+            run_id=self._get_run_id(),
+            created_at=datetime.now(timezone.utc).isoformat(
+                timespec="seconds"
+            ),
+            log_path=str(self._log_path or ""),
+        )
+        try:
+            checkpoint.save(self._checkpoint_path)
+        except OSError as exc:
+            self.log(f"  WARNING: Could not write checkpoint: {exc}")
+
+    def _write_terminal_checkpoint(self) -> None:
+        """Refresh the checkpoint with the final state on abnormal exit.
+
+        The position stays at the last completed agent boundary (the resume
+        point), but the state now carries the real termination reason so the
+        resume-reason filter and the resume banner see it.
+        """
+        if not self._checkpoint_path:
+            return
+
+        # Fall back to a "start of phase" position when no agent boundary was
+        # reached yet (e.g. the first agent timed out): agent_index -1 means
+        # "re-run from the first agent of this phase".
+        position = dict(self._last_position)
+        if not position:
+            position = {
+                "phase": self.state.current_phase or "loop",
+                "iteration": self.state.iteration,
+                "agent_index": -1,
+            }
+
+        checkpoint = CheckpointData(
+            workflow=self._workflow_dict,
+            state=asdict(self.state),
+            position=position,
+            run_id=self._get_run_id(),
+            created_at=datetime.now(timezone.utc).isoformat(
+                timespec="seconds"
+            ),
+            log_path=str(self._log_path or ""),
+        )
+        try:
+            checkpoint.save(self._checkpoint_path)
+        except OSError as exc:
+            self.log(f"  WARNING: Could not write checkpoint: {exc}")
+
+    def _delete_checkpoint(self) -> None:
+        if not self._checkpoint_path:
+            return
+        try:
+            self._checkpoint_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def _termination_summary_line(self) -> str:
         """Human-readable summary of why the run ended."""
         reason = self.state.termination_reason or ""
@@ -357,6 +479,11 @@ class ExecutionEngine:
             return "OpenLoop run stopped: max loops reached"
         if reason.startswith("agent_error:"):
             return f"OpenLoop run stopped: agent error ({reason[12:]})"
+        if reason.startswith("timeout:"):
+            parts = reason.split(":")
+            agent = parts[1] if len(parts) > 1 else "?"
+            secs = parts[2] if len(parts) > 2 else "?"
+            return f"OpenLoop run stopped: agent '{agent}' timed out after {secs}s"
         if reason.startswith("missing_state:"):
             return (
                 f"OpenLoop run stopped: agent '{reason[14:]}' "
@@ -615,6 +742,10 @@ class ExecutionEngine:
 
         workflow = WorkflowConfig.from_dict(clean_data)
 
+        self._resuming = False
+        self._resume_position = {}
+        self._workflow_dict = workflow.to_dict()
+
         self.state = WorkflowState()
         self._init_run_meta()
 
@@ -660,6 +791,113 @@ class ExecutionEngine:
             return self.state
         finally:
             self._close_log()
+            if self.state.termination_reason == "completed":
+                self._delete_checkpoint()
+            else:
+                self._write_terminal_checkpoint()
+
+    def execute_resume(
+        self,
+        checkpoint_path: str | Path,
+        *,
+        max_loops_override: Optional[int] = None,
+    ) -> WorkflowState:
+        """Resume an interrupted run from a checkpoint file.
+
+        The workflow definition, state, and execution position are read from
+        the checkpoint. ``max_loops_override`` allows continuing past a
+        ``max_loops_reached`` termination with a higher limit.
+        """
+        checkpoint = CheckpointData.load(checkpoint_path)
+        if checkpoint is None:
+            raise FileNotFoundError(
+                f"Checkpoint not found or invalid: {checkpoint_path}"
+            )
+
+        workflow_data = dict(checkpoint.workflow)
+        if max_loops_override is not None:
+            workflow_data["max_loops"] = max_loops_override
+
+        workflow = WorkflowConfig.from_dict(workflow_data)
+
+        reason = str(checkpoint.state.get("termination_reason", ""))
+        if not self.config.allows_resume(reason):
+            self.log(
+                f"  Resume not allowed for termination reason '{reason}'"
+            )
+            raise ValueError(
+                f"Resume not allowed for reason: {reason}"
+            )
+
+        self._resuming = True
+        self._resume_position = dict(checkpoint.position or {})
+        self._workflow_dict = workflow.to_dict()
+
+        self.state = WorkflowState.from_json(json.dumps(checkpoint.state))
+
+        self._workdir = workflow.workdir or self.config.workdir
+        self._workflow_name = workflow.name
+        self._workflow_log_dir = workflow.log_dir
+
+        raw_init = workflow.init_script or self.config.init_script
+        if raw_init:
+            p = Path(raw_init)
+            if not p.is_absolute() and (Path.cwd() / p).is_file():
+                self._init_script = str((Path.cwd() / raw_init).resolve())
+            else:
+                self._init_script = raw_init
+        else:
+            self._init_script = None
+
+        self._opencode_opts = self.config.opencode_defaults.merge(
+            workflow.opencode_defaults
+        )
+
+        log_path = Path(checkpoint.log_path or "")
+        if not log_path.is_file():
+            raise FileNotFoundError(
+                f"Log file for resume not found: {log_path or 'unknown'}"
+            )
+        self._init_log_resume(log_path)
+
+        self.log(f"Resuming run {self._get_run_id()} from checkpoint")
+        self.log(f"  Previous termination: {reason}")
+
+        try:
+            resume_phase = self._resume_position.get("phase")
+
+            if resume_phase in ("preparation", None):
+                if not self._run_preparation(workflow):
+                    return self.state
+            # loop/finalization: preparation already completed
+
+            if resume_phase in ("preparation", "loop", None):
+                if self._evaluate_end_condition(workflow.end_state_condition):
+                    if not self.state.termination_reason:
+                        self.state.termination_reason = "completed"
+                elif not self._run_loop(workflow):
+                    return self.state
+
+            # finalization always runs last; its internal logic decides
+            # whether the configured finalize_on_abort policy applies.
+            if not self._run_finalization(workflow):
+                return self.state
+
+            # finalization-phase resumes skip the loop, so the state still
+            # carries the interrupted run's reason; mark completion now that
+            # the remaining finalization agents have succeeded.
+            if resume_phase == "finalization":
+                self.state.termination_reason = "completed"
+            elif not self.state.termination_reason:
+                self.state.termination_reason = "completed"
+
+            return self.state
+        finally:
+            self._close_log()
+            if self.state.termination_reason == "completed":
+                self._delete_checkpoint()
+            else:
+                self._write_terminal_checkpoint()
 
     def _run_preparation(self, workflow: WorkflowConfig) -> bool:
         if not workflow.preparation_agents:
@@ -669,9 +907,20 @@ class ExecutionEngine:
         self.state.current_phase = "preparation"
         self._notify_state()
 
-        for agent_name in workflow.preparation_agents:
-            if not self._execute_agent(agent_name):
+        start = 0
+        if self._resuming and self._resume_position.get("phase") == "preparation":
+            start = self._resume_position.get("agent_index", -1) + 1
+            if start > 0:
+                self.log(
+                    f"  Resuming preparation from agent "
+                    f"'{workflow.preparation_agents[start]}'"
+                )
+
+        for idx in range(start, len(workflow.preparation_agents)):
+            if not self._execute_agent(workflow.preparation_agents[idx]):
                 return False
+
+            self._write_checkpoint(workflow, "preparation", idx)
 
             if self._stop_event.is_set():
                 self.state.termination_reason = "stopped"
@@ -691,6 +940,58 @@ class ExecutionEngine:
         self.state.current_phase = "loop"
         self._notify_state()
 
+        # Resume inside a partially completed iteration (#47). The iteration
+        # number is NOT re-incremented; only the remaining agents run.
+        if self._resuming and self._resume_position.get("phase") == "loop":
+            agents = workflow.loop_agents
+            start_agent = self._resume_position.get("agent_index", -1)
+            if 0 <= start_agent < len(agents) - 1:
+                iteration = self._resume_position.get(
+                    "iteration", self.state.iteration
+                )
+                self.log(
+                    f"  Resuming iteration {iteration}, continuing with "
+                    f"agent '{agents[start_agent + 1]}'"
+                )
+                self._flush_system()
+                self._write_log(
+                    f"<iteration number=\"{iteration}\" "
+                    f"max=\"{workflow.max_loops}\">\n"
+                )
+                self._log_system(
+                    f"Resumed loop iteration {iteration}/{workflow.max_loops}"
+                )
+
+                for idx in range(start_agent + 1, len(agents)):
+                    if not self._execute_agent(agents[idx]):
+                        self._flush_system()
+                        self._write_log("</iteration>\n")
+                        return False
+
+                    self._write_checkpoint(workflow, "loop", idx)
+
+                    if self._stop_event.is_set():
+                        self.state.termination_reason = "stopped"
+                        self._notify_state()
+                        self.log("Execution stopped by user")
+                        self._flush_system()
+                        self._write_log("</iteration>\n")
+                        return False
+
+                    if self._evaluate_end_condition(workflow.end_state_condition):
+                        self.log(
+                            f"  Termination condition met "
+                            f"(iteration {iteration})"
+                        )
+                        self.state.termination_reason = "completed"
+                        self._notify_state()
+                        self._flush_system()
+                        self._write_log("</iteration>\n")
+                        return True
+
+                self._flush_system()
+                self._write_log("</iteration>\n")
+
         while self.state.iteration < workflow.max_loops:
             if self._stop_event.is_set():
                 self.state.termination_reason = "stopped"
@@ -708,11 +1009,13 @@ class ExecutionEngine:
                 f"Loop iteration {self.state.iteration}/{workflow.max_loops}"
             )
 
-            for agent_name in workflow.loop_agents:
+            for idx, agent_name in enumerate(workflow.loop_agents):
                 if not self._execute_agent(agent_name):
                     self._flush_system()
                     self._write_log("</iteration>\n")
                     return False
+
+                self._write_checkpoint(workflow, "loop", idx)
 
                 if self._stop_event.is_set():
                     self.state.termination_reason = "stopped"
@@ -748,12 +1051,17 @@ class ExecutionEngine:
             self.log("No finalization agent defined — skipping")
             return True
 
+        resuming_in_finalization = (
+            self._resuming
+            and self._resume_position.get("phase") == "finalization"
+        )
         should_finalize = (
             self.state.termination_reason == "completed"
             or (
                 self.state.termination_reason == "max_loops_reached"
                 and workflow.finalize_on_abort
             )
+            or resuming_in_finalization
         )
 
         if not should_finalize:
@@ -763,9 +1071,20 @@ class ExecutionEngine:
         self.state.current_phase = "finalization"
         self._notify_state()
 
-        for agent_name in workflow.finalization_agents:
-            if not self._execute_agent(agent_name):
+        start = 0
+        if self._resuming and self._resume_position.get("phase") == "finalization":
+            start = self._resume_position.get("agent_index", -1) + 1
+            if start > 0:
+                self.log(
+                    f"  Resuming finalization from agent "
+                    f"'{workflow.finalization_agents[start]}'"
+                )
+
+        for idx in range(start, len(workflow.finalization_agents)):
+            if not self._execute_agent(workflow.finalization_agents[idx]):
                 return False
+
+            self._write_checkpoint(workflow, "finalization", idx)
 
             if self._stop_event.is_set():
                 self.state.termination_reason = "stopped"
@@ -825,6 +1144,20 @@ class ExecutionEngine:
                 self._write_log(f"<stderr>\n{result.error}\n</stderr>\n\n")
                 if self._verbose:
                     print(result.error, file=sys.stderr)
+
+            if getattr(result, "timed_out", False):
+                seconds = self._timeout if self._timeout else 0
+                self.log(
+                    f"  Agent '{agent_name}' timed out after "
+                    f"{seconds or 'unlimited'}s"
+                )
+                self.state.termination_reason = (
+                    f"timeout:{agent_name}:{seconds}"
+                )
+                self._notify_state()
+                self._flush_system()
+                self._write_log("</agent>\n")
+                return False
 
             if not result.success:
                 self.log(
