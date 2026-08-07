@@ -1232,7 +1232,7 @@ class WorkflowApp:
             return checkpoint_path_for(path)
 
         if len(candidates) == 1:
-            return candidates[0]
+            return self._confirm_resume(candidates[0])
 
         dialog = Toplevel(self._root)
         dialog.title("Resume Run")
@@ -1281,6 +1281,100 @@ class WorkflowApp:
         listbox.bind("<Double-Button-1>", lambda e: _ok())
         dialog.wait_window()
         return result["path"]
+
+    def _confirm_resume(self, checkpoint_path) -> Optional[Path]:
+        """Confirm the checkpoint that Continue will resume.
+
+        Auto-selected from the log dir; the user may continue, abort, or
+        pick a different file instead.
+        """
+        from core.checkpoint import CheckpointData
+
+        checkpoint = CheckpointData.load(checkpoint_path)
+        if checkpoint is None:
+            messagebox.showerror(
+                "Continue", f"Invalid or unreadable checkpoint:\n{checkpoint_path}"
+            )
+            return None
+
+        reason = checkpoint.state.get("termination_reason", "?")
+        run_id = checkpoint.run_id or "?"
+        position = checkpoint.position or {}
+        phase = position.get("phase", "?")
+        iteration = position.get("iteration", "?")
+        created = checkpoint.created_at or "?"
+
+        dialog = Toplevel(self._root)
+        dialog.title("Resume Run")
+        dialog.transient(self._root)
+        dialog.grab_set()
+
+        Label(
+            dialog,
+            text=f"Run {run_id} was interrupted "
+            f"({reason}).\nResume it with this checkpoint?",
+            justify=LEFT,
+        ).pack(anchor=W, padx=12, pady=(12, 4))
+        Label(
+            dialog,
+            text=(
+                f"Checkpoint: {checkpoint_path.name}\n"
+                f"  phase:      {phase}\n"
+                f"  iteration:  {iteration}\n"
+                f"  created:    {created}"
+            ),
+            justify=LEFT,
+            font=("TkDefaultFont", 9),
+        ).pack(anchor=W, padx=12, pady=(0, 12))
+
+        result: dict = {"action": "continue"}
+        btn_frame = Frame(dialog)
+        btn_frame.pack(fill="x", padx=12, pady=(0, 12))
+
+        def _ok():
+            result["action"] = "continue"
+            dialog.destroy()
+
+        def _abort():
+            result["action"] = "abort"
+            dialog.destroy()
+
+        def _choose_other():
+            result["action"] = "other"
+            dialog.destroy()
+
+        Button(btn_frame, text="Continue", command=_ok).pack(side=LEFT)
+        Button(btn_frame, text="Abort", command=_abort).pack(
+            side=LEFT, padx=4
+        )
+        Button(btn_frame, text="Select another file…", command=_choose_other).pack(
+            side=LEFT
+        )
+        dialog.bind("<Return>", lambda e: _ok())
+        dialog.bind("<Escape>", lambda e: _abort())
+        dialog.wait_window()
+
+        if result["action"] == "continue":
+            return checkpoint_path
+        if result["action"] == "abort":
+            return None
+        return self._pick_other_resume_file()
+
+    def _pick_other_resume_file(self) -> Optional[Path]:
+        """Let the user browse for an arbitrary checkpoint/log to resume."""
+        from core.checkpoint import checkpoint_path_for
+
+        path = filedialog.askopenfilename(
+            title="Select OpenLoop Log or Checkpoint to Resume",
+            filetypes=[
+                ("OpenLoop logs", "*.log"),
+                ("Checkpoints", "*.json"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not path:
+            return None
+        return checkpoint_path_for(path)
 
     def _run_engine(self, workflow_data: dict) -> None:
         try:

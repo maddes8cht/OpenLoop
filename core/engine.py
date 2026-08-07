@@ -434,13 +434,21 @@ class ExecutionEngine:
         if not self._checkpoint_path:
             return
 
-        # Fall back to a "start of phase" position when no agent boundary was
-        # reached yet (e.g. the first agent timed out): agent_index -1 means
-        # "re-run from the first agent of this phase".
+        # The run may stop in a phase after the last *completed* agent
+        # boundary, e.g. when the first loop agent fails right after
+        # preparation finished. In that case _last_position still points at
+        # the earlier phase, and resuming there would needlessly re-run that
+        # whole phase. Detect the mismatch via the state's current phase and
+        # fall back to a "start of interrupted phase" position.
         position = dict(self._last_position)
-        if not position:
+        interrupted_phase = self.state.current_phase or ""
+        if (
+            not position
+            or (interrupted_phase and position.get("phase") != interrupted_phase)
+        ):
+            # agent_index -1 means "re-run from the first agent of this phase".
             position = {
-                "phase": self.state.current_phase or "loop",
+                "phase": interrupted_phase or position.get("phase") or "loop",
                 "iteration": self.state.iteration,
                 "agent_index": -1,
             }
@@ -910,7 +918,7 @@ class ExecutionEngine:
         start = 0
         if self._resuming and self._resume_position.get("phase") == "preparation":
             start = self._resume_position.get("agent_index", -1) + 1
-            if start > 0:
+            if 0 < start < len(workflow.preparation_agents):
                 self.log(
                     f"  Resuming preparation from agent "
                     f"'{workflow.preparation_agents[start]}'"
@@ -1074,7 +1082,7 @@ class ExecutionEngine:
         start = 0
         if self._resuming and self._resume_position.get("phase") == "finalization":
             start = self._resume_position.get("agent_index", -1) + 1
-            if start > 0:
+            if 0 < start < len(workflow.finalization_agents):
                 self.log(
                     f"  Resuming finalization from agent "
                     f"'{workflow.finalization_agents[start]}'"

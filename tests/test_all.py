@@ -2400,6 +2400,56 @@ class TestExecutionEngine:
         with pytest.raises(FileNotFoundError):
             engine.execute_resume(tmp_path / "missing.json")
 
+    def test_resume_after_missing_state_in_loop_does_not_rerun_preparation(
+        self, tmp_path
+    ):
+        from core.checkpoint import CheckpointData
+        from core.engine import ExecutionEngine
+
+        def run_engine():
+            engine = ExecutionEngine(log_dir=str(tmp_path))
+            engine._missing_state_handler = lambda agent, path: False
+            engine.runner = self._make_mock_runner(
+                [
+                    {"success": True, "output": '<state_update>{"payload": {"prepped": true}}</state_update>'},
+                    {"success": True, "output": "no state here"},
+                    {"success": True, "output": "no state here"},
+                    {"success": True, "output": "no state here"},
+                ]
+            )
+            engine.agent_loader = self._make_mock_agent_loader(
+                {"prep": "P", "amala": "A"}
+            )
+            state = engine.execute_workflow_data(
+                {
+                    "preparation_agents": ["prep"],
+                    "loop_agents": ["amala"],
+                    "max_loops": 5,
+                    "end_state_condition": "is_complete == True",
+                }
+            )
+            assert state.termination_reason == "missing_state:amala"
+            return engine._checkpoint_path
+
+        checkpoint = run_engine()
+
+        ck = CheckpointData.load(checkpoint)
+        assert ck.position.get("phase") == "loop"
+
+        engine2 = ExecutionEngine(log_dir=str(tmp_path))
+        engine2._missing_state_handler = lambda agent, path: False
+        engine2.runner = self._make_mock_runner(
+            [
+                {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+            ]
+        )
+        engine2.agent_loader = self._make_mock_agent_loader(
+            {"prep": "P", "amala": "A"}
+        )
+        state2 = engine2.execute_resume(checkpoint)
+        assert state2.termination_reason == "completed"
+        assert engine2.runner.run.call_count == 1
+
     def test_log_continuation_two_roots(self, tmp_path):
         from core.engine import ExecutionEngine
 
