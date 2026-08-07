@@ -1099,6 +1099,13 @@ class ExecutionEngine:
 
         self._write_banner(agent_name)
 
+        # Write the effective state the agent is about to receive as a
+        # dedicated <state> block directly before <stdout>. The state is
+        # constant during a single agent run (correction attempts do not
+        # merge), so one block per agent is complete.
+        self._flush_system()
+        self._write_log(f"<state>\n{self.state.to_json()}\n</state>\n\n")
+
         base_prompt = self._build_prompt(agent)
         prompt = base_prompt
         initial_state_json = self.state.to_json()

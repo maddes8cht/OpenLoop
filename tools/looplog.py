@@ -3,8 +3,10 @@
 LoopLog -- Standalone Tkinter viewer for structured OpenLoop log files.
 
 Usage:
-    python tools/looplog.py <logfile> [--hide-system-tags] [--show-entire-file]
-                           [--wrap-lines] [--filter {all,stdout,stderr,system,state_update}]
+    python tools/looplog.py <logfile> [--hide-system-tags] [--omit-stderr]
+                           [--omit-state] [--omit-state-update]
+                           [--show-entire-file] [--wrap-lines]
+                           [--filter {all,stdout,stderr,system,state_update,state}]
                            [--watch]
     python tools/looplog.py              # opens file dialog
 """
@@ -71,8 +73,9 @@ class _RunBoundary:
 # ── Parser ───────────────────────────────────────────────────────────────
 
 # Structural XML tags emitted by the engine. `state_update` is NOT structural:
-# it is agent content written verbatim inside <stdout>.
-_STRUCTURAL_TAGS = {"openloop_log", "iteration", "agent", "stdout", "stderr", "system"}
+# it is agent content written verbatim inside <stdout>. `state` is structural:
+# it holds the effective workflow state the agent is about to receive.
+_STRUCTURAL_TAGS = {"openloop_log", "iteration", "agent", "stdout", "stderr", "system", "state"}
 
 # XML tags recognized as sections (structural tags + agent state updates so
 # the "state_update" filter can find them).
@@ -82,7 +85,7 @@ _ALLOWED_TAGS = _STRUCTURAL_TAGS | {"state_update"}
 # when displaying raw text. Lines merely *starting* with "<" (tracebacks, HTML,
 # agent state updates, comparisons) are content and are preserved.
 _STRUCTURAL_LINE_RE = re.compile(
-    r"^\s*</?(?:openloop_log|iteration|agent|stdout|stderr|system)"
+    r"^\s*</?(?:openloop_log|iteration|agent|stdout|stderr|system|state)"
     r"(?:\s+[^>]*)?>\s*$"
 )
 
@@ -128,8 +131,36 @@ class LogParser:
 
     def parse(self) -> list[Section]:
         if self._has_xml:
-            return self._parse_xml()
-        return self._parse_legacy()
+            sections = self._parse_xml()
+        else:
+            sections = self._parse_legacy()
+        self.sections = sections
+        self._stderr_lines = self._collect_lines(sections, "stderr")
+        self._state_lines = self._collect_lines(sections, "state")
+        self._state_update_lines = self._collect_lines(sections, "state_update")
+        return sections
+
+    def _collect_lines(
+        self, sections: list[Section], tag: str
+    ) -> set[int]:
+        """Line indices covered by any section with the given tag.
+
+        Used by ``get_raw_text`` to drop content from the preview
+        (``omit_stderr``/``omit_state``/``omit_state_update``). These sections
+        are always nested inside an ``<agent>``, so no boundary exception (as
+        for system tags) is needed.
+        """
+        covered_lines: set[int] = set()
+
+        def walk(sec: Section) -> None:
+            if sec.tag == tag:
+                covered_lines.update(range(sec.start, sec.end))
+            for child in sec.children:
+                walk(child)
+
+        for sec in sections:
+            walk(sec)
+        return covered_lines
 
     # -- XML parsing (current format) --
 
@@ -264,6 +295,8 @@ class LogParser:
             return "Stderr"
         if tag == "system":
             return "System"
+        if tag == "state":
+            return "State"
         if tag == "state_update":
             return "State Update"
         return tag
@@ -425,21 +458,46 @@ class LogParser:
 
     # -- Text extraction --
 
-    def get_raw_text(self, start: int, end: int, strip_markers: bool = True) -> str:
-        if not strip_markers:
-            return "".join(self.lines[start:end])
-
+    def get_raw_text(
+        self,
+        start: int,
+        end: int,
+        strip_markers: bool = True,
+        omit_stderr: bool = False,
+        omit_state: bool = False,
+        omit_state_update: bool = False,
+    ) -> str:
         out: list[str] = []
-        for line in self.lines[start:end]:
-            if _STRUCTURAL_LINE_RE.match(line):
-                continue  # strip engine structural tags
-            if _MARKER_LINE_RE.match(line):
-                continue  # strip legacy ##! markers
+        stderr_lines = getattr(self, "_stderr_lines", set())
+        state_lines = getattr(self, "_state_lines", set())
+        state_update_lines = getattr(self, "_state_update_lines", set())
+        for i, line in enumerate(self.lines[start:end]):
+            line_idx = start + i
+            if omit_stderr and line_idx in stderr_lines:
+                continue  # drop stderr output from the preview
+            if omit_state and line_idx in state_lines:
+                continue  # drop effective-state sections from the preview
+            if omit_state_update and line_idx in state_update_lines:
+                continue  # drop raw <state_update> blocks from the preview
+            if strip_markers:
+                if _STRUCTURAL_LINE_RE.match(line):
+                    continue  # strip engine structural tags
+                if _MARKER_LINE_RE.match(line):
+                    continue  # strip legacy ##! markers
             out.append(line)
         return "".join(out)
 
-    def get_full_text(self, strip_markers: bool = True) -> str:
-        return self.get_raw_text(0, self.line_count, strip_markers)
+    def get_full_text(
+        self,
+        strip_markers: bool = True,
+        omit_stderr: bool = False,
+        omit_state: bool = False,
+        omit_state_update: bool = False,
+    ) -> str:
+        return self.get_raw_text(
+            0, self.line_count, strip_markers, omit_stderr,
+            omit_state, omit_state_update,
+        )
 
 
 # ── GUI ──────────────────────────────────────────────────────────────────
@@ -456,6 +514,9 @@ class LoopLogApp:
         self,
         path: Optional[Path] = None,
         hide_system: bool = False,
+        omit_stderr: bool = False,
+        omit_state: bool = False,
+        omit_state_update: bool = False,
         show_all: bool = False,
         wrap_lines: bool = False,
         filter_tag: str = "all",
@@ -472,6 +533,9 @@ class LoopLogApp:
         self._sec_map: dict[str, Section] = {}
         self._highlight_after_id: Optional[str] = None
         self._start_hide_system = hide_system
+        self._start_omit_stderr = omit_stderr
+        self._start_omit_state = omit_state
+        self._start_omit_state_update = omit_state_update
         self._start_show_all = show_all
         self._start_wrap_lines = wrap_lines
         self._start_filter = filter_tag
@@ -479,6 +543,8 @@ class LoopLogApp:
         self._watch_active = False
         self._watch_after_id: Optional[str] = None
         self._watch_signature: Optional[tuple[int, int]] = None
+        self._mru_paths: list[str] = []
+        self._mru_menu: Optional[tk.Menu] = None
 
         self._build_ui()
         self._setup_bindings()
@@ -493,10 +559,47 @@ class LoopLogApp:
         menubar = tk.Menu(self.root)
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Open…", command=self._open_file, accelerator="Ctrl+O")
+        self._mru_menu = file_menu
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.quit)
         menubar.add_cascade(label="File", menu=file_menu)
+
+        # Toggle state shared by the toolbar checkboxes and the View menu.
+        self._show_all = tk.BooleanVar(value=self._start_show_all)
+        self._hide_system = tk.BooleanVar(value=self._start_hide_system)
+        self._omit_stderr = tk.BooleanVar(value=self._start_omit_stderr)
+        self._omit_state = tk.BooleanVar(value=self._start_omit_state)
+        self._omit_state_update = tk.BooleanVar(value=self._start_omit_state_update)
+        self._wrap_lines = tk.BooleanVar(value=self._start_wrap_lines)
+
+        view_menu = tk.Menu(menubar, tearoff=0)
+        view_menu.add_checkbutton(
+            label="Show entire file", variable=self._show_all,
+            command=self._on_show_all
+        )
+        view_menu.add_checkbutton(
+            label="Hide system tags", variable=self._hide_system,
+            command=self._on_hide_system
+        )
+        view_menu.add_checkbutton(
+            label="Omit stderr output", variable=self._omit_stderr,
+            command=self._on_omit_stderr
+        )
+        view_menu.add_checkbutton(
+            label="Omit state", variable=self._omit_state,
+            command=self._on_omit_state
+        )
+        view_menu.add_checkbutton(
+            label="Omit state update", variable=self._omit_state_update,
+            command=self._on_omit_state_update
+        )
+        view_menu.add_checkbutton(
+            label="Wrap lines", variable=self._wrap_lines,
+            command=self._on_wrap_lines
+        )
+        menubar.add_cascade(label="View", menu=view_menu)
         self.root.config(menu=menubar)
+        self._load_mru()
 
         # Top bar: current file label + Filter + All toggle
         top = ttk.Frame(self.root, padding=(8, 4))
@@ -509,26 +612,37 @@ class LoopLogApp:
         self._filter_var = tk.StringVar(value=self._start_filter)
         self._filter_dropdown = ttk.Combobox(
             top, textvariable=self._filter_var,
-            values=["all", "stdout", "stderr", "system", "state_update"],
+            values=["all", "stdout", "stderr", "system", "state_update", "state"],
             state="readonly", width=12
         )
         self._filter_dropdown.pack(side=tk.RIGHT, padx=(0, 8))
         self._filter_dropdown.bind("<<ComboboxSelected>>", self._on_filter_change)
 
-        self._show_all = tk.BooleanVar(value=self._start_show_all)
         ttk.Button(top, text="Refresh", command=self._refresh).pack(side=tk.RIGHT, padx=(0, 8))
         ttk.Checkbutton(
             top, text="Show entire file", variable=self._show_all,
             command=self._on_show_all
         ).pack(side=tk.RIGHT)
-        self._hide_system = tk.BooleanVar(value=self._start_hide_system)
         self._hide_system_check = ttk.Checkbutton(
             top, text="Hide system tags", variable=self._hide_system,
             command=self._on_hide_system
         )
         self._hide_system_check.pack(side=tk.RIGHT, padx=(8, 0))
-
-        self._wrap_lines = tk.BooleanVar(value=self._start_wrap_lines)
+        self._omit_stderr_check = ttk.Checkbutton(
+            top, text="Omit stderr output", variable=self._omit_stderr,
+            command=self._on_omit_stderr
+        )
+        self._omit_stderr_check.pack(side=tk.RIGHT, padx=(8, 0))
+        self._omit_state_check = ttk.Checkbutton(
+            top, text="Omit state", variable=self._omit_state,
+            command=self._on_omit_state
+        )
+        self._omit_state_check.pack(side=tk.RIGHT, padx=(8, 0))
+        self._omit_state_update_check = ttk.Checkbutton(
+            top, text="Omit state update", variable=self._omit_state_update,
+            command=self._on_omit_state_update
+        )
+        self._omit_state_update_check.pack(side=tk.RIGHT, padx=(8, 0))
         ttk.Checkbutton(
             top, text="Wrap lines", variable=self._wrap_lines,
             command=self._on_wrap_lines
@@ -614,6 +728,81 @@ class LoopLogApp:
         self._watch_signature = self._file_signature()
         if self._watch and not self._is_log_complete():
             self._start_watching()
+
+        self._record_mru(path)
+
+    # -- MRU (most recently used log files) --
+
+    @staticmethod
+    def _mru_config_path() -> Path:
+        """Path of the UI preferences file, next to the OpenLoop config.
+
+        Follows the same search order as the config (CWD → next to
+        ``openloop.py``) so a separate ``openloop-ui.json`` can be kept
+        without touching the JSONC ``openloop.json``.
+        """
+        candidates = [
+            Path("openloop-ui.json"),
+            Path(__file__).resolve().parent.parent / "openloop-ui.json",
+        ]
+        for cand in candidates:
+            if cand.exists():
+                return cand
+        # Persist next to wherever the config would be found.
+        config_candidates = [
+            Path("openloop.json"),
+            Path(__file__).resolve().parent.parent / "openloop.json",
+        ]
+        for cand in config_candidates:
+            if cand.exists():
+                return cand.with_name("openloop-ui.json")
+        return Path(__file__).resolve().parent.parent / "openloop-ui.json"
+
+    def _load_mru(self) -> None:
+        try:
+            raw = json.loads(self._mru_config_path().read_text(encoding="utf-8"))
+            paths = raw.get("recent_logs", []) if isinstance(raw, dict) else []
+            self._mru_paths = [str(p) for p in paths][:5]
+        except (OSError, ValueError):
+            self._mru_paths = []
+        self._update_mru_menu()
+
+    def _save_mru(self) -> None:
+        try:
+            path = self._mru_config_path()
+            path.write_text(
+                json.dumps({"recent_logs": self._mru_paths}, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+    def _record_mru(self, path: Path) -> None:
+        resolved = str(path.resolve())
+        self._mru_paths = [resolved] + [
+            p for p in self._mru_paths if p != resolved
+        ]
+        self._mru_paths = self._mru_paths[:5]
+        self._update_mru_menu()
+        self._save_mru()
+
+    def _update_mru_menu(self) -> None:
+        if self._mru_menu is None:
+            return
+        menu = self._mru_menu
+        # Refresh the MRU section: it starts at index 2 (Open…, separator).
+        for i in range(menu.index("end") or 0, 1, -1):
+            menu.delete(i)
+        if not self._mru_paths:
+            menu.add_command(label="No recent files", state="disabled")
+        else:
+            for path in self._mru_paths:
+                menu.add_command(
+                    label=path,
+                    command=lambda p=path: self.load_log(Path(p)),
+                )
+        menu.add_separator()
+        menu.add_command(label="Exit", command=self.root.quit)
 
     # -- Watch mode (live refresh) --
 
@@ -715,21 +904,52 @@ class LoopLogApp:
     def _update_filter_options(self) -> None:
         # Filters only apply to XML-format logs; disable for legacy logs.
         is_xml = any(sec.kind == "xml" for sec in self.sections)
-        values = ["all", "stdout", "stderr", "system", "state_update"]
+        values = ["all", "stdout", "stderr", "system", "state_update", "state"]
         if self._hide_system.get():
             # With system tags hidden there is no isolated system view.
             values.remove("system")
             if self._filter_var.get() == "system":
                 self._filter_var.set("all")
+        if self._omit_stderr.get():
+            # With stderr omitted there is no isolated stderr view.
+            values.remove("stderr")
+            if self._filter_var.get() == "stderr":
+                self._filter_var.set("all")
+        if self._omit_state.get():
+            # With effective state omitted there is no isolated state view.
+            values.remove("state")
+            if self._filter_var.get() == "state":
+                self._filter_var.set("all")
+        if self._omit_state_update.get():
+            # With raw state updates omitted there is no isolated update view.
+            values.remove("state_update")
+            if self._filter_var.get() == "state_update":
+                self._filter_var.set("all")
         self._filter_dropdown.configure(
             values=values,
             state="readonly" if is_xml else "disabled",
         )
-        self._hide_system_check.configure(
-            state="normal" if is_xml else "disabled"
-        )
+        for check in (
+            self._hide_system_check,
+            self._omit_stderr_check,
+            self._omit_state_check,
+            self._omit_state_update_check,
+        ):
+            check.configure(state="normal" if is_xml else "disabled")
 
     def _on_hide_system(self) -> None:
+        self._update_filter_options()
+        self._rebuild_tree()
+
+    def _on_omit_stderr(self) -> None:
+        self._update_filter_options()
+        self._rebuild_tree()
+
+    def _on_omit_state(self) -> None:
+        self._update_filter_options()
+        self._rebuild_tree()
+
+    def _on_omit_state_update(self) -> None:
         self._update_filter_options()
         self._rebuild_tree()
 
@@ -759,7 +979,11 @@ class LoopLogApp:
             self._tree.see(first[0])
         if self._show_all.get():
             if self.parser is not None:
-                self._set_text(self.parser.get_full_text(strip_markers=False))
+                self._set_text(
+                    self.parser.get_full_text(
+                        strip_markers=False, **self._omit_kwargs()
+                    )
+                )
         elif self.sections:
             self._display_section(self.sections[0])
 
@@ -780,6 +1004,19 @@ class LoopLogApp:
         if self._hide_system.get() and sec.tag == "system":
             if boundary_system_ids is None or id(sec) not in boundary_system_ids:
                 return ""
+        omit_stderr = getattr(self, "_omit_stderr", None)
+        if omit_stderr is not None and omit_stderr.get() and sec.tag == "stderr":
+            return ""
+        omit_state = getattr(self, "_omit_state", None)
+        if omit_state is not None and omit_state.get() and sec.tag == "state":
+            return ""
+        omit_state_update = getattr(self, "_omit_state_update", None)
+        if (
+            omit_state_update is not None
+            and omit_state_update.get()
+            and sec.tag == "state_update"
+        ):
+            return ""
         node_id = self._tree.insert(parent, tk.END, text=sec.label, open=True)
         self._sec_map[node_id] = sec
 
@@ -816,8 +1053,12 @@ class LoopLogApp:
         sec = self._sec_map.get(sel[0])
         if sec is None:
             return
-        start = f"{sec.start + 1}.0"
-        end = f"{max(sec.end, sec.start + 1) + 1}.0"
+        omitted = self._omitted_line_indices()
+        start = f"{sec.start + 1 - sum(1 for o in omitted if o < sec.start)}.0"
+        end_raw = max(sec.end, sec.start + 1)
+        end = (
+            f"{end_raw + 1 - sum(1 for o in omitted if o < end_raw)}.0"
+        )
         self._text.see(start)
         self._text.tag_remove("highlight", "1.0", tk.END)
         self._text.tag_add("highlight", start, end)
@@ -826,6 +1067,25 @@ class LoopLogApp:
         self._highlight_after_id = self._text.after(
             1500, self._clear_highlight
         )
+
+    def _omitted_line_indices(self) -> set[int]:
+        """Raw file lines dropped from the preview by the active omit flags.
+
+        In "Show entire file" mode the text widget shows ``get_full_text`` with
+        omitted sections removed, so raw line numbers no longer match widget
+        lines. This returns the raw indices that are hidden, letting
+        ``_jump_to_section`` translate section bounds into widget coordinates.
+        """
+        if self.parser is None:
+            return set()
+        omitted: set[int] = set()
+        if self._omit_stderr.get():
+            omitted |= getattr(self.parser, "_stderr_lines", set())
+        if self._omit_state.get():
+            omitted |= getattr(self.parser, "_state_lines", set())
+        if self._omit_state_update.get():
+            omitted |= getattr(self.parser, "_state_update_lines", set())
+        return omitted
 
     def _clear_highlight(self) -> None:
         self._text.tag_remove("highlight", "1.0", tk.END)
@@ -852,6 +1112,8 @@ class LoopLogApp:
         if self.parser is None:
             return
 
+        omit_kwargs = self._omit_kwargs()
+
         filter_tag = self._filter_var.get()
         if filter_tag != "all":
             # Show every matching block across the whole log, not just the
@@ -862,13 +1124,17 @@ class LoopLogApp:
                 return
             parts: list[str] = []
             for m in matches:
-                text = self.parser.get_raw_text(m.start, m.end).strip()
+                text = self.parser.get_raw_text(
+                    m.start, m.end, **omit_kwargs
+                ).strip()
                 parts.append(_block_header(m) + text)
             self._set_text("\n\n".join(parts))
             return
 
         if len(secs) == 1:
-            text = self.parser.get_raw_text(secs[0].start, secs[0].end)
+            text = self.parser.get_raw_text(
+                secs[0].start, secs[0].end, **omit_kwargs
+            )
             self._set_text(text)
             return
 
@@ -876,9 +1142,19 @@ class LoopLogApp:
         # horizontal ruler labelled with the node's title.
         parts = []
         for sec in secs:
-            text = self.parser.get_raw_text(sec.start, sec.end).strip()
+            text = self.parser.get_raw_text(
+                sec.start, sec.end, **omit_kwargs
+            ).strip()
             parts.append(_block_header(sec) + text)
         self._set_text("\n\n".join(parts))
+
+    def _omit_kwargs(self) -> dict:
+        """Preview kwargs honoring the active omit checkboxes."""
+        return {
+            "omit_stderr": self._omit_stderr.get(),
+            "omit_state": self._omit_state.get(),
+            "omit_state_update": self._omit_state_update.get(),
+        }
 
     def _on_filter_change(self, _event: Optional[tk.Event] = None) -> None:
         if self._show_all.get():
@@ -896,7 +1172,11 @@ class LoopLogApp:
         if self.parser is None:
             return
         if self._show_all.get():
-            self._set_text(self.parser.get_full_text(strip_markers=False))
+            self._set_text(
+                self.parser.get_full_text(
+                    strip_markers=False, **self._omit_kwargs()
+                )
+            )
         else:
             sel = self._tree.selection()
             if not sel:
@@ -939,6 +1219,31 @@ def main(argv: Optional[list[str]] = None) -> None:
         ),
     )
     parser.add_argument(
+        "--omit-stderr",
+        action="store_true",
+        help=(
+            "activate the 'Omit stderr output' checkbox at startup; stderr "
+            "sections are dropped from both the treeview and the preview"
+        ),
+    )
+    parser.add_argument(
+        "--omit-state",
+        action="store_true",
+        help=(
+            "activate the 'Omit state' checkbox at startup; effective-state "
+            "sections are dropped from both the treeview and the preview"
+        ),
+    )
+    parser.add_argument(
+        "--omit-state-update",
+        action="store_true",
+        help=(
+            "activate the 'Omit state update' checkbox at startup; raw "
+            "<state_update> blocks are dropped from both the treeview and "
+            "the preview"
+        ),
+    )
+    parser.add_argument(
         "--show-entire-file",
         action="store_true",
         help="activate the 'Show entire file' checkbox and render the whole file at startup",
@@ -950,7 +1255,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     )
     parser.add_argument(
         "--filter",
-        choices=["all", "stdout", "stderr", "system", "state_update"],
+        choices=["all", "stdout", "stderr", "system", "state_update", "state"],
         default="all",
         help="preselect the content filter (default: all)",
     )
@@ -971,6 +1276,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     app = LoopLogApp(
         path,
         hide_system=args.hide_system_tags,
+        omit_stderr=args.omit_stderr,
+        omit_state=args.omit_state,
+        omit_state_update=args.omit_state_update,
         show_all=args.show_entire_file,
         wrap_lines=args.wrap_lines,
         filter_tag=args.filter,

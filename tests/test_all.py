@@ -1858,6 +1858,96 @@ class TestExecutionEngine:
                 f"agent {agent.label} is missing its banner system block"
             )
 
+    def test_effective_state_block_written_per_agent(self, tmp_path):
+        from core.engine import ExecutionEngine
+        from core.runner import OpenCodeOptions
+        from tools.looplog import LogParser
+
+        log_dir = tmp_path
+        engine = ExecutionEngine(log_dir=str(log_dir))
+        runner = self._make_mock_runner(
+            [
+                {"success": True, "output": '<state_update>{"is_complete": false, "payload": {"note": "first"}}</state_update>'},
+                {"success": True, "output": '<state_update>{"is_complete": true, "payload": {"note": "second"}}</state_update>'},
+                {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+            ]
+        )
+        runner.PROMPT_FILENAME = "current_prompt.md"
+        engine.runner = runner
+        engine.agent_loader = self._make_mock_agent_loader(
+            {"prep": "Prep", "a": "Agent", "fin": "Fin"}
+        )
+        engine.config = type("C", (), {
+            "opencode_defaults": OpenCodeOptions(),
+            "workdir": None,
+            "init_script": None,
+            "log_dir": str(log_dir),
+            "no_log_file": False,
+            "default_max_loops": 10,
+        })()
+        state = engine.execute_workflow_data({
+            "preparation_agents": ["prep"],
+            "loop_agents": ["a"],
+            "finalization_agents": ["fin"],
+            "max_loops": 1,
+            "end_state_condition": "is_complete == True",
+            "name": "statetest",
+            "log_dir": str(log_dir),
+        })
+        assert state.termination_reason == "completed"
+
+        log_files = list(log_dir.glob("openloop-run-statetest-*.log"))
+        assert len(log_files) == 1
+        parser = LogParser(log_files[0])
+        sections = parser.parse()
+        root = sections[0]
+
+        def collect(sec):
+            yield sec
+            for c in sec.children:
+                yield from collect(c)
+
+        all_secs = list(collect(root))
+        agents = [s for s in all_secs if s.tag == "agent"]
+        assert len(agents) == 3
+
+        state_blocks = [s for s in all_secs if s.tag == "state"]
+        assert len(state_blocks) == 3  # one per agent run
+
+        # Every state block sits directly before the agent's stdout.
+        for sb in state_blocks:
+            parent = next(
+                (p for p in all_secs if any(c is sb for c in p.children)), None
+            )
+            assert parent is not None and parent.tag == "agent", (
+                f"state block must live inside <agent>"
+            )
+            siblings = parent.children
+            idx = siblings.index(sb)
+            assert siblings[idx + 1].tag == "stdout", (
+                "state block must be directly followed by <stdout>"
+            )
+
+        # The first agent sees the initial state (empty payload + run meta).
+        first_state = state_blocks[0]
+        raw = parser.get_raw_text(first_state.start, first_state.end)
+        import json as _json
+        data = _json.loads(raw)
+        assert data["payload"] == {}
+        assert data["is_complete"] is False
+        assert "run_id" in data["meta"]
+
+        # The middle agent sees the payload merged from the preparation agent.
+        mid_state = state_blocks[1]
+        raw_mid = parser.get_raw_text(mid_state.start, mid_state.end)
+        assert _json.loads(raw_mid)["payload"].get("note") == "first"
+
+        # The last agent sees the merged payload from earlier agents.
+        last_state = state_blocks[-1]
+        raw_last = parser.get_raw_text(last_state.start, last_state.end)
+        data_last = _json.loads(raw_last)
+        assert data_last["payload"].get("note") == "second"
+
     # -- run summary --
 
     def test_format_duration(self):
@@ -3117,6 +3207,9 @@ class TestLoopLogViewer:
             app = object.__new__(looplog.LoopLogApp)
             app.root = looplog.tk.Tk()
             app._start_hide_system = False
+            app._start_omit_stderr = False
+            app._start_omit_state = False
+            app._start_omit_state_update = False
             app._start_show_all = False
             app._start_wrap_lines = False
             app._start_filter = "all"
@@ -3142,6 +3235,12 @@ class TestLoopLogViewer:
         app.sections = sections
         app._filter_var = MagicMock()
         app._filter_var.get.return_value = "all"
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
         app._set_text = MagicMock()
 
         agent = self._find(sections, "agent")[0]
@@ -3164,6 +3263,12 @@ class TestLoopLogViewer:
         app.sections = sections
         app._filter_var = MagicMock()
         app._filter_var.get.return_value = "all"
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
         app._set_text = MagicMock()
 
         agent = self._find(sections, "agent")[0]
@@ -3185,11 +3290,20 @@ class TestLoopLogViewer:
         app._filter_var.get.return_value = "all"
         app._filter_dropdown = MagicMock()
         app._hide_system_check = MagicMock()
+        app._omit_stderr_check = MagicMock()
+        app._omit_state_check = MagicMock()
+        app._omit_state_update_check = MagicMock()
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
 
         app._update_filter_options()
         values = app._filter_dropdown.configure.call_args.kwargs["values"]
         assert "system" not in values
-        assert values == ["all", "stdout", "stderr", "state_update"]
+        assert values == ["all", "stdout", "stderr", "state_update", "state"]
 
     def test_update_filter_options_resets_system_filter(self, parser):
         from tools.looplog import LoopLogApp
@@ -3202,6 +3316,16 @@ class TestLoopLogViewer:
         app._filter_var.get.return_value = "system"
         app._filter_dropdown = MagicMock()
         app._hide_system_check = MagicMock()
+        app._omit_stderr_check = MagicMock()
+        app._omit_state_check = MagicMock()
+        app._omit_state_update_check = MagicMock()
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._omit_stderr_check = MagicMock()
 
         app._update_filter_options()
         app._filter_var.set.assert_called_once_with("all")
@@ -3364,6 +3488,588 @@ class TestLoopLogViewer:
         assert system_secs[0].end <= iteration.start
         assert system_secs[1].start >= iteration.end
 
+    # -- Point: Omit stderr (--omit-stderr) --
+
+    def _stderr_xml(self):
+        return (
+            "<openloop_log>\n"
+            "<iteration number=\"1\" max=\"1\">\n"
+            "<agent name=\"amala\" phase=\"loop\" iteration=\"1\" run_id=\"abc\">\n"
+            "<stdout>\n"
+            "visible stdout\n"
+            "</stdout>\n"
+            "<stderr>\n"
+            "hidden stderr\n"
+            "</stderr>\n"
+            "</agent>\n"
+            "</iteration>\n"
+            "</openloop_log>\n"
+        )
+
+    def _stderr_parser(self, tmp_path):
+        from tools.looplog import LogParser
+
+        log = tmp_path / "stderr.log"
+        log.write_text(self._stderr_xml(), encoding="utf-8")
+        return LogParser(log)
+
+    def test_parser_omit_stderr_removes_from_raw_text(self, tmp_path):
+        parser = self._stderr_parser(tmp_path)
+        sections = parser.parse()
+        agent = self._find(sections, "agent")[0]
+
+        full = parser.get_raw_text(agent.start, agent.end)
+        assert "visible stdout" in full
+        assert "hidden stderr" in full
+
+        omitted = parser.get_raw_text(agent.start, agent.end, omit_stderr=True)
+        assert "visible stdout" in omitted
+        assert "hidden stderr" not in omitted
+
+    def test_parser_omit_stderr_full_text(self, tmp_path):
+        parser = self._stderr_parser(tmp_path)
+        sections = parser.parse()
+
+        full = parser.get_full_text(strip_markers=False)
+        assert "visible stdout" in full
+        assert "hidden stderr" in full
+
+        omitted = parser.get_full_text(strip_markers=False, omit_stderr=True)
+        assert "visible stdout" in omitted
+        assert "hidden stderr" not in omitted
+
+    def test_parser_omit_stderr_default_keeps_stderr(self, tmp_path):
+        parser = self._stderr_parser(tmp_path)
+        sections = parser.parse()
+        agent = self._find(sections, "agent")[0]
+        assert "hidden stderr" in parser.get_raw_text(agent.start, agent.end)
+
+    def test_insert_node_skips_stderr_when_omitted(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        sections = self._stderr_parser(tmp_path).parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = False
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = True
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._tree = MagicMock()
+        app._tree.insert.return_value = "node"
+        app._sec_map = {}
+
+        app._insert_node("", sections[0])
+        labels = [c.kwargs["text"] for c in app._tree.insert.call_args_list]
+        assert "Stderr" not in labels
+        assert "Stdout" in labels
+
+    def test_insert_node_keeps_stderr_when_not_omitted(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        sections = self._stderr_parser(tmp_path).parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = False
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._tree = MagicMock()
+        app._tree.insert.return_value = "node"
+        app._sec_map = {}
+
+        app._insert_node("", sections[0])
+        labels = [c.kwargs["text"] for c in app._tree.insert.call_args_list]
+        assert "Stderr" in labels
+
+    def test_display_sections_omits_stderr(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        parser = self._stderr_parser(tmp_path)
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "all"
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = True
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._set_text = MagicMock()
+
+        agent = self._find(sections, "agent")[0]
+        app._display_sections([agent])
+
+        text = app._set_text.call_args[0][0]
+        assert "visible stdout" in text
+        assert "hidden stderr" not in text
+
+    def test_update_filter_options_removes_stderr_when_omitted(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        sections = self._stderr_parser(tmp_path).parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = False
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = True
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "all"
+        app._filter_dropdown = MagicMock()
+        app._hide_system_check = MagicMock()
+        app._omit_stderr_check = MagicMock()
+        app._omit_state_check = MagicMock()
+        app._omit_state_update_check = MagicMock()
+
+        app._update_filter_options()
+        values = app._filter_dropdown.configure.call_args.kwargs["values"]
+        assert "stderr" not in values
+        assert values == ["all", "stdout", "system", "state_update", "state"]
+
+    def test_update_filter_options_resets_stderr_filter_when_omitted(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        sections = self._stderr_parser(tmp_path).parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = False
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = True
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "stderr"
+        app._filter_dropdown = MagicMock()
+        app._hide_system_check = MagicMock()
+        app._omit_stderr_check = MagicMock()
+        app._omit_state_check = MagicMock()
+        app._omit_state_update_check = MagicMock()
+        app._omit_stderr_check = MagicMock()
+
+        app._update_filter_options()
+        app._filter_var.set.assert_called_once_with("all")
+
+    def test_on_omit_stderr_updates_filter_and_rebuilds(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._update_filter_options = MagicMock()
+        app._rebuild_tree = MagicMock()
+
+        app._on_omit_stderr()
+        app._update_filter_options.assert_called_once()
+        app._rebuild_tree.assert_called_once()
+
+    def test_on_show_all_omits_stderr_when_checked(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        parser = self._stderr_parser(tmp_path)
+        parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = parser.sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = True
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = True
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._set_text = MagicMock()
+
+        app._on_show_all()
+        text = app._set_text.call_args[0][0]
+        assert "visible stdout" in text
+        assert "hidden stderr" not in text
+
+    # -- Point: Effective <state> + <state_update> omit options --
+
+    def _state_xml(self):
+        return (
+            "<openloop_log>\n"
+            "<iteration number=\"1\" max=\"1\">\n"
+            "<agent name=\"amala\" phase=\"loop\" iteration=\"1\" run_id=\"abc\">\n"
+            "<state>\n"
+            "{\n"
+            '  "payload": {"note": "effective"}\n'
+            "}\n"
+            "</state>\n"
+            "<stdout>\n"
+            "visible stdout\n"
+            "<state_update>\n"
+            '{"is_complete": false, "payload": {"note": "raw"}}\n'
+            "</state_update>\n"
+            "</stdout>\n"
+            "</agent>\n"
+            "</iteration>\n"
+            "</openloop_log>\n"
+        )
+
+    def _state_parser(self, tmp_path):
+        from tools.looplog import LogParser
+
+        log = tmp_path / "state.log"
+        log.write_text(self._state_xml(), encoding="utf-8")
+        return LogParser(log)
+
+    def test_parser_recognizes_state_as_section(self, tmp_path):
+        parser = self._state_parser(tmp_path)
+        sections = parser.parse()
+        states = self._find(sections, "state")
+        assert len(states) == 1
+        # The state block's JSON content is preserved as raw text.
+        raw = parser.get_raw_text(states[0].start, states[0].end)
+        assert '"note": "effective"' in raw
+
+    def test_parser_omit_state_removes_from_raw_text(self, tmp_path):
+        parser = self._state_parser(tmp_path)
+        sections = parser.parse()
+        agent = self._find(sections, "agent")[0]
+
+        full = parser.get_raw_text(agent.start, agent.end)
+        assert '"note": "effective"' in full
+        assert '"note": "raw"' in full
+
+        omitted = parser.get_raw_text(agent.start, agent.end, omit_state=True)
+        assert '"note": "effective"' not in omitted
+        assert '"note": "raw"' in omitted
+        assert "visible stdout" in omitted
+
+    def test_parser_omit_state_update_removes_only_updates(self, tmp_path):
+        parser = self._state_parser(tmp_path)
+        sections = parser.parse()
+        agent = self._find(sections, "agent")[0]
+
+        omitted = parser.get_raw_text(
+            agent.start, agent.end, omit_state_update=True
+        )
+        assert '"note": "raw"' not in omitted
+        assert '"note": "effective"' in omitted
+        assert "visible stdout" in omitted
+
+    def test_parser_omit_state_update_full_text(self, tmp_path):
+        parser = self._state_parser(tmp_path)
+        parser.parse()
+        omitted = parser.get_full_text(
+            strip_markers=False, omit_state_update=True
+        )
+        assert '"note": "raw"' not in omitted
+        assert '"note": "effective"' in omitted
+
+    def test_insert_node_skips_state_when_omitted(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        sections = self._state_parser(tmp_path).parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = False
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = True
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._tree = MagicMock()
+        app._tree.insert.return_value = "node"
+        app._sec_map = {}
+
+        app._insert_node("", sections[0])
+        labels = [c.kwargs["text"] for c in app._tree.insert.call_args_list]
+        assert "State" not in labels
+        assert "Stdout" in labels
+
+    def test_insert_node_keeps_state_when_not_omitted(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        sections = self._state_parser(tmp_path).parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = False
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._tree = MagicMock()
+        app._tree.insert.return_value = "node"
+        app._sec_map = {}
+
+        app._insert_node("", sections[0])
+        labels = [c.kwargs["text"] for c in app._tree.insert.call_args_list]
+        assert "State" in labels
+        assert "State Update" in labels
+
+    def test_insert_node_skips_state_update_when_omitted(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        sections = self._state_parser(tmp_path).parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = False
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = True
+        app._tree = MagicMock()
+        app._tree.insert.return_value = "node"
+        app._sec_map = {}
+
+        app._insert_node("", sections[0])
+        labels = [c.kwargs["text"] for c in app._tree.insert.call_args_list]
+        assert "State Update" not in labels
+        assert "State" in labels
+
+    def test_display_sections_omits_state(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        parser = self._state_parser(tmp_path)
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "all"
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = True
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._set_text = MagicMock()
+
+        agent = self._find(sections, "agent")[0]
+        app._display_sections([agent])
+
+        text = app._set_text.call_args[0][0]
+        assert "visible stdout" in text
+        assert '"note": "effective"' not in text
+
+    def test_display_sections_omits_state_update(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        parser = self._state_parser(tmp_path)
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "all"
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = True
+        app._set_text = MagicMock()
+
+        agent = self._find(sections, "agent")[0]
+        app._display_sections([agent])
+
+        text = app._set_text.call_args[0][0]
+        assert "visible stdout" in text
+        assert '"note": "raw"' not in text
+        assert '"note": "effective"' in text
+
+    def test_update_filter_options_removes_state_when_omitted(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        sections = self._state_parser(tmp_path).parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = False
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = True
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "all"
+        app._filter_dropdown = MagicMock()
+        app._hide_system_check = MagicMock()
+        app._omit_stderr_check = MagicMock()
+        app._omit_state_check = MagicMock()
+        app._omit_state_update_check = MagicMock()
+
+        app._update_filter_options()
+        values = app._filter_dropdown.configure.call_args.kwargs["values"]
+        assert "state" not in values
+        assert values == ["all", "stdout", "stderr", "system", "state_update"]
+
+    def test_update_filter_options_resets_state_filter_when_omitted(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        sections = self._state_parser(tmp_path).parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = False
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = True
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "state"
+        app._filter_dropdown = MagicMock()
+        app._hide_system_check = MagicMock()
+        app._omit_stderr_check = MagicMock()
+        app._omit_state_check = MagicMock()
+        app._omit_state_update_check = MagicMock()
+
+        app._update_filter_options()
+        app._filter_var.set.assert_called_once_with("all")
+
+    def test_update_filter_options_removes_state_update_when_omitted(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        sections = self._state_parser(tmp_path).parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._hide_system = MagicMock()
+        app._hide_system.get.return_value = False
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = True
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "all"
+        app._filter_dropdown = MagicMock()
+        app._hide_system_check = MagicMock()
+        app._omit_stderr_check = MagicMock()
+        app._omit_state_check = MagicMock()
+        app._omit_state_update_check = MagicMock()
+
+        app._update_filter_options()
+        values = app._filter_dropdown.configure.call_args.kwargs["values"]
+        assert "state_update" not in values
+        assert values == ["all", "stdout", "stderr", "system", "state"]
+
+    def test_on_omit_state_updates_and_rebuilds(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._update_filter_options = MagicMock()
+        app._rebuild_tree = MagicMock()
+
+        app._on_omit_state()
+        app._update_filter_options.assert_called_once()
+        app._rebuild_tree.assert_called_once()
+
+    def test_on_omit_state_update_updates_and_rebuilds(self, parser):
+        from tools.looplog import LoopLogApp
+
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.sections = sections
+        app._update_filter_options = MagicMock()
+        app._rebuild_tree = MagicMock()
+
+        app._on_omit_state_update()
+        app._update_filter_options.assert_called_once()
+        app._rebuild_tree.assert_called_once()
+
+    def test_on_show_all_omits_state_when_checked(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        parser = self._state_parser(tmp_path)
+        parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = parser.sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = True
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = True
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._set_text = MagicMock()
+
+        app._on_show_all()
+        text = app._set_text.call_args[0][0]
+        assert "visible stdout" in text
+        assert '"note": "effective"' not in text
+
+    def test_on_show_all_omits_state_update_when_checked(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        parser = self._state_parser(tmp_path)
+        parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = parser.sections
+        app._show_all = MagicMock()
+        app._show_all.get.return_value = True
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = True
+        app._set_text = MagicMock()
+
+        app._on_show_all()
+        text = app._set_text.call_args[0][0]
+        assert "visible stdout" in text
+        assert '"note": "raw"' not in text
+
+    def test_filter_state_matches_state_sections(self, tmp_path):
+        from tools.looplog import LoopLogApp
+
+        parser = self._state_parser(tmp_path)
+        sections = parser.parse()
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._filter_var = MagicMock()
+        app._filter_var.get.return_value = "state"
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+        app._set_text = MagicMock()
+
+        app._display_sections([])
+        text = app._set_text.call_args[0][0]
+        assert '"note": "effective"' in text
+
     # -- Point 3: Show entire file -> jump + highlight --
 
     def test_jump_to_section_scrolls_and_highlights(self, parser):
@@ -3377,6 +4083,12 @@ class TestLoopLogViewer:
         app._text = MagicMock()
         app._highlight_after_id = None
         app._sec_map = {}
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
 
         agent = self._find(sections, "agent")[0]
         app._sec_map["node"] = agent
@@ -3388,6 +4100,58 @@ class TestLoopLogViewer:
         app._text.see.assert_called_once_with(start)
         app._text.tag_add.assert_called_once_with("highlight", start, end)
         app._text.after.assert_called_once_with(1500, app._clear_highlight)
+
+    def test_jump_to_section_offsets_when_omissions_active(self, tmp_path):
+        from tools.looplog import LogParser, LoopLogApp
+
+        xml = (
+            "<openloop_log>\n"
+            "<iteration number=\"1\" max=\"1\">\n"
+            "<agent name=\"amala\" phase=\"loop\" iteration=\"1\" run_id=\"abc\">\n"
+            "<state>\n"
+            "{\"payload\": {}}\n"
+            "</state>\n"
+            "<stdout>\n"
+            "visible\n"
+            "</stdout>\n"
+            "<stderr>\n"
+            "hidden\n"
+            "</stderr>\n"
+            "</agent>\n"
+            "</iteration>\n"
+            "</openloop_log>\n"
+        )
+        log = tmp_path / "jump.log"
+        log.write_text(xml, encoding="utf-8")
+        parser = LogParser(log)
+        sections = parser.parse()
+
+        app = object.__new__(LoopLogApp)
+        app.parser = parser
+        app.sections = sections
+        app._tree = MagicMock()
+        app._text = MagicMock()
+        app._highlight_after_id = None
+        app._sec_map = {}
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = True
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = True
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
+
+        stdout_sec = self._find(sections, "stdout")[0]
+        app._sec_map["node"] = stdout_sec
+        app._tree.selection.return_value = ["node"]
+
+        app._jump_to_section()
+        # state section spans raw lines 3-5 (3 dropped lines) before stdout at
+        # line 6, so the highlight must start at widget line 6+1-3 = 4.
+        expected_start = stdout_sec.start + 1 - 3
+        start = f"{expected_start}.0"
+        app._text.see.assert_called_once_with(start)
+        args = app._text.tag_add.call_args[0]
+        assert args[1] == start
 
     def test_on_select_jumps_when_show_all(self, parser):
         from tools.looplog import LoopLogApp
@@ -3544,11 +4308,17 @@ class TestLoopLogViewer:
         app.sections = sections
         app._show_all = MagicMock()
         app._show_all.get.return_value = True
+        app._omit_stderr = MagicMock()
+        app._omit_stderr.get.return_value = False
+        app._omit_state = MagicMock()
+        app._omit_state.get.return_value = False
+        app._omit_state_update = MagicMock()
+        app._omit_state_update.get.return_value = False
         app._set_text = MagicMock()
 
         app._on_show_all()
         app._set_text.assert_called_once_with(
-            parser.get_full_text(strip_markers=False)
+            parser.get_full_text(strip_markers=False, omit_stderr=False)
         )
 
     def test_on_show_all_off_redraws_selection(self, parser):
@@ -3669,6 +4439,7 @@ class TestLoopLogViewer:
         app._watch_after_id = None
         app._watch_signature = None
         app.root = MagicMock()
+        app._record_mru = MagicMock()
 
         app.load_log(parser.path)
         app._hide_system.set.assert_not_called()
@@ -3676,6 +4447,7 @@ class TestLoopLogViewer:
         app._update_filter_options.assert_called_once()
         app._rebuild_tree.assert_called_once()
         assert app.sections is not None
+        app._record_mru.assert_called_once()
 
     def test_on_wrap_lines_applies_word_wrap(self):
         from tools.looplog import LoopLogApp
@@ -3735,10 +4507,14 @@ class TestLoopLogViewer:
             patch.object(looplog.tk, "Text", side_effect=fake_widget),
             patch.object(looplog.tk, "BooleanVar", side_effect=fake_booleanvar),
             patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
+            patch.object(looplog.LoopLogApp, "_load_mru", lambda self: None),
         ):
             app = object.__new__(looplog.LoopLogApp)
             app.root = looplog.tk.Tk()
             app._start_hide_system = True
+            app._start_omit_stderr = True
+            app._start_omit_state = True
+            app._start_omit_state_update = True
             app._start_show_all = True
             app._start_wrap_lines = True
             app._start_filter = "all"
@@ -3746,6 +4522,9 @@ class TestLoopLogViewer:
 
         assert checkbox_vars["Show entire file"] is True
         assert checkbox_vars["Hide system tags"] is True
+        assert checkbox_vars["Omit stderr output"] is True
+        assert checkbox_vars["Omit state"] is True
+        assert checkbox_vars["Omit state update"] is True
         assert checkbox_vars["Wrap lines"] is True
 
     def test_build_ui_uses_wrap_word_when_start_wrap_lines(self):
@@ -3774,10 +4553,14 @@ class TestLoopLogViewer:
             patch.object(looplog.tk, "Text", side_effect=fake_text),
             patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
             patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
+            patch.object(looplog.LoopLogApp, "_load_mru", lambda self: None),
         ):
             app = object.__new__(looplog.LoopLogApp)
             app.root = looplog.tk.Tk()
             app._start_hide_system = False
+            app._start_omit_stderr = False
+            app._start_omit_state = False
+            app._start_omit_state_update = False
             app._start_show_all = False
             app._start_wrap_lines = True
             app._start_filter = "all"
@@ -3811,10 +4594,14 @@ class TestLoopLogViewer:
             patch.object(looplog.tk, "Text", side_effect=fake_text),
             patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
             patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
+            patch.object(looplog.LoopLogApp, "_load_mru", lambda self: None),
         ):
             app = object.__new__(looplog.LoopLogApp)
             app.root = looplog.tk.Tk()
             app._start_hide_system = False
+            app._start_omit_stderr = False
+            app._start_omit_state = False
+            app._start_omit_state_update = False
             app._start_show_all = False
             app._start_wrap_lines = False
             app._start_filter = "all"
@@ -3851,10 +4638,14 @@ class TestLoopLogViewer:
             patch.object(looplog.tk, "Text", side_effect=fake_widget),
             patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
             patch.object(looplog.tk, "StringVar", side_effect=fake_stringvar),
+            patch.object(looplog.LoopLogApp, "_load_mru", lambda self: None),
         ):
             app = object.__new__(looplog.LoopLogApp)
             app.root = looplog.tk.Tk()
             app._start_hide_system = False
+            app._start_omit_stderr = False
+            app._start_omit_state = False
+            app._start_omit_state_update = False
             app._start_show_all = False
             app._start_wrap_lines = False
             app._start_filter = "system"
@@ -4062,10 +4853,14 @@ class TestLoopLogViewer:
         captured = {}
         app_mock = MagicMock()
 
-        def fake_app(path, hide_system=False, show_all=False,
+        def fake_app(path, hide_system=False, omit_stderr=False, omit_state=False,
+                     omit_state_update=False, show_all=False,
                      wrap_lines=False, filter_tag="all", watch=False):
             captured["path"] = path
             captured["hide_system"] = hide_system
+            captured["omit_stderr"] = omit_stderr
+            captured["omit_state"] = omit_state
+            captured["omit_state_update"] = omit_state_update
             captured["show_all"] = show_all
             captured["wrap_lines"] = wrap_lines
             captured["filter_tag"] = filter_tag
@@ -4074,12 +4869,16 @@ class TestLoopLogViewer:
 
         monkeypatch.setattr(looplog, "LoopLogApp", fake_app)
         looplog.main(
-            [str(log), "--hide-system-tags", "--show-entire-file",
+            [str(log), "--hide-system-tags", "--omit-stderr", "--omit-state",
+             "--omit-state-update", "--show-entire-file",
              "--wrap-lines", "--filter", "stdout", "--watch"]
         )
 
         assert captured["path"] == log
         assert captured["hide_system"] is True
+        assert captured["omit_stderr"] is True
+        assert captured["omit_state"] is True
+        assert captured["omit_state_update"] is True
         assert captured["show_all"] is True
         assert captured["wrap_lines"] is True
         assert captured["filter_tag"] == "stdout"
@@ -4095,9 +4894,13 @@ class TestLoopLogViewer:
         captured = {}
         app_mock = MagicMock()
 
-        def fake_app(path, hide_system=False, show_all=False,
+        def fake_app(path, hide_system=False, omit_stderr=False, omit_state=False,
+                     omit_state_update=False, show_all=False,
                      wrap_lines=False, filter_tag="all", watch=False):
             captured["hide_system"] = hide_system
+            captured["omit_stderr"] = omit_stderr
+            captured["omit_state"] = omit_state
+            captured["omit_state_update"] = omit_state_update
             captured["show_all"] = show_all
             captured["wrap_lines"] = wrap_lines
             captured["filter_tag"] = filter_tag
@@ -4108,6 +4911,9 @@ class TestLoopLogViewer:
         looplog.main([str(log)])
 
         assert captured["hide_system"] is False
+        assert captured["omit_stderr"] is False
+        assert captured["omit_state"] is False
+        assert captured["omit_state_update"] is False
         assert captured["show_all"] is False
         assert captured["wrap_lines"] is False
         assert captured["filter_tag"] == "all"
@@ -4139,9 +4945,13 @@ class TestLoopLogViewer:
         captured = {}
         app_mock = MagicMock()
 
-        def fake_app(path, hide_system=False, show_all=False,
+        def fake_app(path, hide_system=False, omit_stderr=False, omit_state=False,
+                     omit_state_update=False, show_all=False,
                      wrap_lines=False, filter_tag="all", watch=False):
             captured["path"] = path
+            captured["omit_stderr"] = omit_stderr
+            captured["omit_state"] = omit_state
+            captured["omit_state_update"] = omit_state_update
             captured["wrap_lines"] = wrap_lines
             captured["filter_tag"] = filter_tag
             captured["watch"] = watch
@@ -4151,7 +4961,141 @@ class TestLoopLogViewer:
         looplog.main([])
 
         assert captured["path"] is None
+        assert captured["omit_state"] is False
+        assert captured["omit_state_update"] is False
         assert captured["wrap_lines"] is False
         assert captured["filter_tag"] == "all"
         assert captured["watch"] is False
         app_mock.run.assert_called_once()
+
+    # -- Point: MRU recent logs --
+
+    def test_record_mru_deduplicates_and_caps(self):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app._mru_paths = []
+        app._update_mru_menu = MagicMock()
+        app._save_mru = MagicMock()
+
+        app._record_mru(Path(r"C:\logs\a.log"))
+        app._record_mru(Path(r"C:\logs\b.log"))
+        app._record_mru(Path(r"C:\logs\a.log"))
+        app._record_mru(Path(r"C:\logs\c.log"))
+        app._record_mru(Path(r"C:\logs\d.log"))
+        app._record_mru(Path(r"C:\logs\e.log"))
+        app._record_mru(Path(r"C:\logs\f.log"))
+
+        assert app._mru_paths == [
+            r"C:\logs\f.log",
+            r"C:\logs\e.log",
+            r"C:\logs\d.log",
+            r"C:\logs\c.log",
+            r"C:\logs\a.log",
+        ]
+        assert len(app._mru_paths) == 5
+        assert app._save_mru.call_count == 7
+
+    def test_update_mru_menu_populates(self):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app._mru_paths = [r"C:\logs\a.log", r"C:\logs\b.log"]
+        app._mru_menu = MagicMock()
+        app._mru_menu.index.return_value = 5
+        app.root = MagicMock()
+        app.load_log = MagicMock()
+
+        app._update_mru_menu()
+
+        added = [
+            c.kwargs.get("label")
+            for c in app._mru_menu.add_command.call_args_list
+            if c.kwargs.get("label") not in ("Exit", "No recent files")
+        ]
+        assert added == [r"C:\logs\a.log", r"C:\logs\b.log"]
+        assert app._mru_menu.add_separator.call_count >= 1
+        app._mru_menu.add_command.assert_any_call(label="Exit", command=app.root.quit)
+
+    def test_update_mru_menu_empty_state(self):
+        from tools.looplog import LoopLogApp
+
+        app = object.__new__(LoopLogApp)
+        app._mru_paths = []
+        app._mru_menu = MagicMock()
+        app._mru_menu.index.return_value = 2
+        app.root = MagicMock()
+
+        app._update_mru_menu()
+
+        app._mru_menu.add_command.assert_any_call(
+            label="No recent files", state="disabled"
+        )
+
+    def test_save_load_mru_roundtrip(self, tmp_path, monkeypatch):
+        from tools.looplog import LoopLogApp
+
+        cfg = tmp_path / "openloop-ui.json"
+        app = object.__new__(LoopLogApp)
+        app._mru_paths = [r"C:\logs\a.log", r"C:\logs\b.log"]
+        app._update_mru_menu = MagicMock()
+        monkeypatch.setattr(
+            LoopLogApp, "_mru_config_path", lambda self: cfg
+        )
+
+        app._save_mru()
+
+        app2 = object.__new__(LoopLogApp)
+        app2._update_mru_menu = MagicMock()
+        app2._mru_config_path = lambda: cfg
+        app2._load_mru()
+
+        assert app2._mru_paths == [r"C:\logs\a.log", r"C:\logs\b.log"]
+        assert app2._update_mru_menu.call_count == 1
+
+    def test_load_mru_handles_missing_file(self, tmp_path, monkeypatch):
+        from tools.looplog import LoopLogApp
+
+        cfg = tmp_path / "missing-ui.json"
+        app = object.__new__(LoopLogApp)
+        app._update_mru_menu = MagicMock()
+        app._mru_config_path = lambda: cfg
+
+        app._load_mru()
+
+        assert app._mru_paths == []
+        app._update_mru_menu.assert_called_once()
+
+    def test_load_log_records_mru(self, tmp_path, monkeypatch):
+        from tools import looplog
+
+        xml = (
+            "<openloop_log>\n"
+            "<iteration number=\"1\" max=\"1\">\n"
+            "<agent name=\"amala\" phase=\"loop\" iteration=\"1\" run_id=\"abc\">\n"
+            "<stdout>\n"
+            "hi\n"
+            "</stdout>\n"
+            "</agent>\n"
+            "</iteration>\n"
+            "</openloop_log>\n"
+        )
+        log = tmp_path / "mru.log"
+        log.write_text(xml, encoding="utf-8")
+
+        app = object.__new__(looplog.LoopLogApp)
+        app._path = None
+        app._record_mru = MagicMock()
+        app._file_label = MagicMock()
+        app._watch = False
+        app._stop_watching = MagicMock()
+        app._start_watching = MagicMock()
+        app._is_log_complete = MagicMock(return_value=True)
+        app._update_filter_options = MagicMock()
+        app._rebuild_tree = MagicMock()
+        app._sec_map = {}
+        app._mru_menu = None
+
+        app.load_log(log)
+
+        app._record_mru.assert_called_once_with(log)
