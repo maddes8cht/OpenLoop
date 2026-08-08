@@ -3287,6 +3287,105 @@ class TestWorkflowApp:
 
             app._output_notebook.select.assert_not_called()
 
+    def test_gui_missing_state_handler_returns_poller_answer(self):
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+
+            def poller():
+                kind, data = app._log_queue.get(timeout=3)
+                assert kind == "ask_state"
+                agent_name, response, event = data
+                assert agent_name == "amala"
+                response["answer"] = True
+                event.set()
+
+            t = threading.Thread(target=poller, daemon=True)
+            t.start()
+            result = app._gui_missing_state_handler("amala", None)
+            t.join(5)
+            assert not t.is_alive()
+            assert result is True
+
+    def test_gui_missing_state_handler_transmits_no(self):
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title"),
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+
+            def poller():  # default no -> safe abort
+                kind, data = app._log_queue.get(timeout=3)
+                agent_name, response, event = data
+                response["answer"] = False
+                event.set()
+
+            t = threading.Thread(target=poller, daemon=True)
+            t.start()
+            result = app._gui_missing_state_handler("amala", None)
+            t.join(timeout=3)
+            assert result is False
+
+    def test_gui_poll_ask_state_answers(self):
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._update_title"),
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+
+            response = {"answer": None}
+            event = threading.Event()
+            app._log_queue.put(("ask_state", ("amala", response, event)))
+            with patch(
+                "ui.app.messagebox.askyesno", return_value=True
+            ) as mock_ask:
+                app._poll_log_queue()
+            assert mock_ask.call_count == 1
+            assert response["answer"] is True
+            assert event.is_set()
+
+    def test_gui_poll_ask_state_answers_no(self):
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._update_title"),
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+
+            response = {"answer": None}
+            event = threading.Event()
+            app._log_queue.put(("ask_state", ("amala", response, event)))
+            with patch(
+                "ui.app.messagebox.askyesno", return_value=False
+            ) as mock_ask:
+                app._poll_log_queue()
+            assert mock_ask.call_count == 1
+            assert response["answer"] is False
+            assert event.is_set()
+
 
 # ===========================================================================
 # tools.looplog — Viewer
