@@ -21,6 +21,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, List
 
+# Make the shared flow-status module importable when run via
+# ``python tools/looplog.py`` (the repo root is not on sys.path then).
+try:
+    from ui import status as status
+except ImportError:  # pragma: no cover
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from ui import status as status
+
 
 # ── Markers (legacy formats) ─────────────────────────────────────────────
 
@@ -545,6 +553,8 @@ class LoopLogApp:
         self._watch_signature: Optional[tuple[int, int]] = None
         self._mru_paths: list[str] = []
         self._mru_menu: Optional[tk.Menu] = None
+        self._flow_state: str = "idle"
+        self._banner: Optional[tk.Label] = None
 
         self._build_ui()
         self._setup_bindings()
@@ -600,6 +610,10 @@ class LoopLogApp:
         menubar.add_cascade(label="View", menu=view_menu)
         self.root.config(menu=menubar)
         self._load_mru()
+
+        # Flow-status banner (shared presentation with the OpenLoop GUI).
+        self._banner = status.create_banner(self.root)
+        self._banner.pack(fill=tk.X, side=tk.TOP)
 
         # Top bar: current file label + Filter + All toggle
         top = ttk.Frame(self.root, padding=(8, 4))
@@ -723,6 +737,7 @@ class LoopLogApp:
         self._file_label.config(text=str(path.resolve()))
         self._update_filter_options()
         self._rebuild_tree()
+        self._refresh_status()
 
         self._stop_watching()
         self._watch_signature = self._file_signature()
@@ -845,6 +860,7 @@ class LoopLogApp:
             if self._reload_preserving_selection():
                 self._watch_signature = sig
                 if self._is_log_complete():
+                    self._refresh_status(flash=True, sound=True)
                     self._stop_watching()
                     return
 
@@ -858,6 +874,45 @@ class LoopLogApp:
         if self.parser is None or not self.parser.lines:
             return True
         return self.parser.lines[-1].strip() == "</openloop_log>"
+
+    def _summary_text(self) -> str:
+        """Raw text of the last <system> section (the closing summary).
+
+        Returns an empty string when no summary block exists yet.
+        """
+        parser = getattr(self, "parser", None)
+        sections = getattr(self, "sections", None) or []
+        if parser is None or not sections:
+            return ""
+        try:
+            systems = self._matching_sections("system")
+            if not systems:
+                return ""
+            sec = systems[-1]
+            return parser.get_raw_text(sec.start, sec.end).strip()
+        except Exception:
+            return ""
+
+    def _refresh_status(self, *, flash: bool = False, sound: bool = False) -> None:
+        """Recompute the flow state from the loaded log and repaint the banner.
+
+        A log still being written reads as ``running``; a closed log gets its
+        final state from the closing summary block.
+        """
+        parser = getattr(self, "parser", None)
+        if parser is None:
+            state = "idle"
+        else:
+            summary = self._summary_text()
+            state = status.detect_log_state(parser.lines, summary)
+        self._flow_state = state
+        root = getattr(self, "root", None)
+        status.apply_banner(
+            getattr(self, "_banner", None), root, state,
+            flash=flash, sound=sound,
+        )
+        if root is not None:
+            root.title(f"{status.STATE_LABELS[state]} — LoopLog")
 
     def _reload_preserving_selection(self) -> bool:
         """Re-parse the log and rebuild the tree, keeping the selection.
@@ -877,6 +932,7 @@ class LoopLogApp:
         self._update_filter_options()
         self._rebuild_tree()
         self._restore_selection(keys)
+        self._refresh_status()
         return True
 
     def _selection_keys(self) -> list[tuple[str, str, int]]:
