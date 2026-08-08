@@ -64,4 +64,5 @@ Each agent invocation:
 - `is_complete=true` is only honored for agents with `can_complete: true` in frontmatter or roles `auditor`/`approver`/`finalizer`/`finalization`. Other agents' `is_complete=true` is forced to `false` and logged.
 - Unknown keys in a state update are silently **moved into `payload`** (not dropped). Keys `current_phase`, `iteration`, `meta` are protected and ignored.
 - The prompt is delivered as a file (`current_prompt.md`) to avoid OS command-line length limits, not as a CLI argument.
-- If an agent returns no valid state update after `MAX_CORRECTIONS` (2) retries, the engine prompts interactively (TTY) or aborts (non-interactive).
+- If an agent returns no valid state update after `MAX_CORRECTIONS` (2) retries, the `missing_state_policy` decides: `ask` (default) prompts interactively (CLI TTY) or shows a popup (GUI) via the injected handler; `continue` proceeds without a state update; `abort` terminates. CLI: `--on-missing-state ask|continue|abort`.
+- CLI `--on-missing-state`, GUI popup questions run on the main thread via the log queue + a `threading.Event` (Tkinter is not thread-safe).

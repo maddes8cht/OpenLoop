@@ -219,6 +219,7 @@ class ExecutionEngine:
         log_dir: Optional[str] = None,
         timeout: Optional[int] = None,
         missing_state_handler: Optional[MissingStateHandler] = None,
+        missing_state_policy: str = "ask",
         state_callback: Optional[Callable[[dict], None]] = None,
         log_path_callback: Optional[Callable[[Path], None]] = None,
     ):
@@ -254,6 +255,7 @@ class ExecutionEngine:
         self._opencode_opts = OpenCodeOptions()
 
         self._missing_state_handler = missing_state_handler
+        self._missing_state_policy = missing_state_policy
 
         # Resume support (#47)
         self._resuming = False
@@ -619,8 +621,34 @@ class ExecutionEngine:
         return False
 
     def _handle_missing_state(self, agent_name: str) -> bool:
-        handler = self._missing_state_handler or self._default_missing_state_handler
+        """Decide whether to continue when an agent returns no state update.
 
+        Policy (``missing_state_policy``) takes precedence over any injected
+        handler:
+
+        * ``"continue"`` — always proceed (agent treated as success).
+        * ``"abort"`` — always terminate the workflow.
+        * ``"ask"`` (default) — delegate to the handler, which prompts
+          interactively (CLI) or shows a popup (GUI), aborting when the
+          answer is no or no interactive context exists.
+        """
+        policy = self._missing_state_policy
+
+        if policy == "continue":
+            self.log(
+                f"  Policy 'continue': proceeding without a state update "
+                f"from '{agent_name}'."
+            )
+            return True
+
+        if policy == "abort":
+            self.log(
+                f"  Policy 'abort': terminating due to missing state "
+                f"update from '{agent_name}'."
+            )
+            return False
+
+        handler = self._missing_state_handler or self._default_missing_state_handler
         try:
             return bool(handler(agent_name, self._log_path))
         except Exception as exc:

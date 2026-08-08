@@ -2450,6 +2450,92 @@ class TestExecutionEngine:
         assert state2.termination_reason == "completed"
         assert engine2.runner.run.call_count == 1
 
+    def test_missing_state_policy_continue(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine(
+            log_dir=str(tmp_path), missing_state_policy="continue"
+        )
+        engine.runner = self._make_mock_runner(
+            [
+                {"success": True, "output": "no state here"},
+                {"success": True, "output": "no state here"},
+                {"success": True, "output": "no state here"},
+                {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+            ]
+        )
+        engine.agent_loader = self._make_mock_agent_loader(
+            {"amala": "A", "vera": "V"}
+        )
+        state = engine.execute_workflow_data(
+            {
+                "loop_agents": ["amala", "vera"],
+                "max_loops": 3,
+                "end_state_condition": "is_complete == True",
+            }
+        )
+        assert state.termination_reason == "completed"
+        assert engine.runner.run.call_count == 4
+
+    def test_missing_state_policy_abort(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine(
+            log_dir=str(tmp_path), missing_state_policy="abort"
+        )
+        engine.runner = self._make_mock_runner(
+            [
+                {"success": True, "output": "no state here"},
+                {"success": True, "output": "no state here"},
+                {"success": True, "output": "no state here"},
+            ]
+        )
+        engine.agent_loader = self._make_mock_agent_loader(
+            {"amala": "A", "vera": "V"}
+        )
+        state = engine.execute_workflow_data(
+            {
+                "loop_agents": ["amala", "vera"],
+                "max_loops": 3,
+                "end_state_condition": "is_complete == True",
+            }
+        )
+        assert state.termination_reason == "missing_state:amala"
+        assert engine.runner.run.call_count == 3
+
+    def test_missing_state_policy_ask_delegates_to_handler(self, tmp_path):
+        from core.engine import ExecutionEngine
+
+        engine = ExecutionEngine(log_dir=str(tmp_path))
+        calls = {"n": 0}
+
+        def handler(agent_name, path):
+            calls["n"] += 1
+            return True
+
+        engine._missing_state_handler = handler
+        engine.runner = self._make_mock_runner(
+            [
+                {"success": True, "output": "no state here"},
+                {"success": True, "output": "no state here"},
+                {"success": True, "output": "no state here"},
+                {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+            ]
+        )
+        engine.agent_loader = self._make_mock_agent_loader(
+            {"amala": "A", "vera": "V"}
+        )
+        state = engine.execute_workflow_data(
+            {
+                "loop_agents": ["amala", "vera"],
+                "max_loops": 3,
+                "end_state_condition": "is_complete == True",
+            }
+        )
+        assert state.termination_reason == "completed"
+        assert calls["n"] == 1
+        assert engine.runner.run.call_count == 4
+
     def test_log_continuation_two_roots(self, tmp_path):
         from core.engine import ExecutionEngine
 
@@ -2563,6 +2649,25 @@ class TestOpenLoopEntryPoint:
 
         args = parse_args([])
         assert args.layout == "default"
+
+    def test_parse_args_on_missing_state_default(self):
+        from openloop import parse_args
+
+        args = parse_args([])
+        assert args.on_missing_state == "ask"
+
+    def test_parse_args_on_missing_state_choices(self):
+        from openloop import parse_args
+
+        assert parse_args(["--on-missing-state", "continue"]).on_missing_state == "continue"
+        assert parse_args(["--on-missing-state", "abort"]).on_missing_state == "abort"
+        assert parse_args(["--on-missing-state", "ask"]).on_missing_state == "ask"
+
+    def test_parse_args_on_missing_state_invalid_rejected(self):
+        from openloop import parse_args
+
+        with pytest.raises(SystemExit):
+            parse_args(["--on-missing-state", "maybe"])
 
     def test_parse_args_layout_output_rejected(self):
         from openloop import parse_args

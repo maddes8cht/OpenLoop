@@ -100,6 +100,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Subprocess timeout in seconds (0 = no timeout, default: 1800)",
     )
+    parser.add_argument(
+        "--on-missing-state",
+        type=str,
+        dest="on_missing_state",
+        choices=["ask", "continue", "abort"],
+        default="ask",
+        help="What to do when an agent returns no valid state update: "
+             "'ask' prompts interactively (default), 'continue' proceeds "
+             "without a state update, 'abort' terminates the workflow",
+    )
     return parser.parse_args(argv)
 
 
@@ -145,6 +155,7 @@ def _run_cli(args: argparse.Namespace, config) -> None:
             log_file=args.log_file,
             log_dir=args.log_dir,
             timeout=args.timeout,
+            missing_state_policy=args.on_missing_state,
         )
 
         if args.resume:

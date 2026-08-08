@@ -269,6 +269,7 @@ Additional CLI options:
 | `--workdir <path>` | Override the working directory |
 | `--init-script <cmd>` | Override the init script/command |
 | `--opencode-defaults <json>` | JSON string overriding opencode defaults for all agents (e.g., `'{"model":"gpt-4o","agent":"plan"}'`) |
+| `--on-missing-state <mode>` | Behavior when an agent returns no valid state update: `ask` (default), `continue`, or `abort` |
 | `--verbose`, `-v` | Stream agent stdout/stderr to terminal |
 | `--config <path>` | Path to configuration file (default: `openloop.json` in CWD, falls back to `openloop.json` next to `openloop.py`) |
 

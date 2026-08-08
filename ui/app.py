@@ -1096,11 +1096,28 @@ class WorkflowApp:
             no_log_file=no_log, log_file=self._cli_log_file,
             log_dir=self._cli_log_dir,
             timeout=timeout,
+            missing_state_handler=self._gui_missing_state_handler,
             state_callback=lambda s: self._log_queue.put(("state", s)),
             log_path_callback=lambda p: self._log_queue.put(
                 ("log_path", str(p))
             ),
         )
+
+    def _gui_missing_state_handler(self, agent_name: str, log_path) -> bool:
+        """Engine-thread handler that prompts via the GUI main thread.
+
+        Tkinter is not thread-safe, so the engine thread (worker) cannot show
+        a messagebox directly. We post a request on the log queue, which the
+        main-thread poller picks up, shows the dialog, and answers back
+        through a threading.Event.
+        """
+        response: dict = {"answer": None}
+        event = threading.Event()
+        self._log_queue.put(
+            ("ask_state", (agent_name, response, event))
+        )
+        event.wait(600)
+        return bool(response["answer"])
 
     def _is_resumable(self, checkpoint_path) -> bool:
         """Whether a checkpoint may be resumed per the resume_reasons filter."""
@@ -1554,6 +1571,16 @@ class WorkflowApp:
                 self._update_state_tab(data)
             elif kind == "log_path":
                 self._on_log_path_known(data)
+            elif kind == "ask_state":
+                agent_name, response, event = data
+                answer = messagebox.askyesno(
+                    "Missing State Update",
+                    f"Agent '{agent_name}' did not provide a valid state "
+                    "update.\n\nContinue workflow anyway at your own risk?",
+                    parent=self._root,
+                )
+                response["answer"] = bool(answer)
+                event.set()
 
         self._root.after(100, self._poll_log_queue)
 

@@ -17,6 +17,7 @@ python openloop.py [OPTIONS]
 | `--workdir <path>` | Override the working directory for agent subprocesses. Takes precedence over `openloop.json` and workflow settings. Ignored with `--resume` (the checkpoint's stored workflow wins). |
 | `--init-script <cmd>` | Override the init script/command run before each agent invocation. Takes precedence over `openloop.json` and workflow settings. Ignored with `--resume`. |
 | `--opencode-defaults <json>` | JSON string overriding opencode defaults for all agents (e.g., `'{"model":"gpt-4o","agent":"plan"}'`). Merges with config/workflow settings. |
+| `--on-missing-state <mode>` | What to do when an agent returns no valid state update after retries. One of `ask` (default; prompts interactively in a TTY), `continue` (proceed without a state update), or `abort` (terminate the workflow). |
 | `--config <path>` | Path to configuration file (default: `openloop.json` in CWD, falls back to `openloop.json` next to `openloop.py`) |
 | `--verbose`, `-v` | Stream agent stdout/stderr to terminal during execution |
 | `--log-dir <path>` | Log directory (overrides config and workflow `log_dir`). Ignored with `--resume` (the resume appends to the original log) |
@@ -51,6 +52,12 @@ python openloop.py --cli --resume .openloop/openloop-run-demo-20260101-120000.lo
 
 # Continue past a max_loops_reached termination with a higher limit
 python openloop.py --cli --resume .openloop/openloop-run-demo-20260101-120000.json --max-loops 20
+
+# Always abort when an agent returns no state update (non-interactive/CI)
+python openloop.py --cli --workflow workflows/test_generation.json --on-missing-state abort
+
+# Or force-proceed without a state update
+python openloop.py --cli --workflow workflows/test_generation.json --on-missing-state continue
 
 # Launch the GUI with a pre-loaded workflow
 python openloop.py --workflow workflows/test_generation.json
