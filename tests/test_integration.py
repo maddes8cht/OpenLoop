@@ -93,7 +93,7 @@ def _make_mock_agent_loader(agents: dict | None = None):
 
     def get_agent(name):
         prompt = agents.get(name, "You are a default agent.")
-        return type("A", (), {"name": name, "role": "", "system_prompt": prompt})()
+        return type("A", (), {"name": name, "can_complete": True, "role": "auditor", "system_prompt": prompt})()
 
     loader.get_agent.side_effect = get_agent
     return loader
@@ -204,7 +204,7 @@ def test_malformed_agent_output():
         "max_loops": 1,
         "end_state_condition": "is_complete == True",
     })
-    assert state.termination_reason == "max_loops_reached"
+    assert state.termination_reason == "missing_state:a"
     assert state.is_complete is False
     assert state.iteration == 1
 
