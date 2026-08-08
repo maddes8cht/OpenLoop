@@ -30,6 +30,7 @@ class Config:
     log_dir: str = ".openloop"
     no_log_file: bool = False
     default_timeout: int = 1800
+    resume_reasons: Optional[list[str]] = None
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Config":
@@ -67,6 +68,18 @@ class Config:
         if "opencode_defaults" in raw and isinstance(raw["opencode_defaults"], dict):
             opencode_opts = OpenCodeOptions.from_dict(raw["opencode_defaults"])
 
+        raw_reasons = raw.get("resume_reasons")
+        if isinstance(raw_reasons, list):
+            resume_reasons = [
+                str(r).strip() for r in raw_reasons if str(r).strip()
+            ] or None
+        elif raw_reasons is None:
+            resume_reasons = None
+        else:
+            raise ValueError(
+                "resume_reasons must be a list of termination-reason prefixes"
+            )
+
         return cls(
             agents_dir=str(raw.get("agents_dir", cls.agents_dir)),
             workflows_dir=str(raw.get("workflows_dir", cls.workflows_dir)),
@@ -78,6 +91,7 @@ class Config:
             log_dir=str(raw.get("log_dir", cls.log_dir)),
             no_log_file=bool(raw.get("no_log_file", cls.no_log_file)),
             default_timeout=int(raw.get("default_timeout", cls.default_timeout)),
+            resume_reasons=resume_reasons,
         )
 
     def _validate(self) -> None:
@@ -97,6 +111,22 @@ class Config:
             raise ValueError(
                 f"default_max_loops must be >= 1, got {self.default_max_loops}"
             )
+
+    def allows_resume(self, reason: str) -> bool:
+        """Whether a terminated run with *reason* may be resumed.
+
+        When ``resume_reasons`` is ``None`` (default), every reason except
+        ``"completed"`` is resumable. Otherwise the configured list holds
+        prefixes matched against the reason, e.g. ``"agent_error"`` matches
+        ``"agent_error:a"`` and ``"timeout"`` matches ``"timeout:a:600"``.
+        """
+        if not reason:
+            return False
+
+        if self.resume_reasons is None:
+            return reason != "completed"
+
+        return any(reason.startswith(prefix) for prefix in self.resume_reasons)
 
 
 def get_config() -> Config:

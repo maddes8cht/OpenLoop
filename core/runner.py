@@ -73,6 +73,7 @@ class RunResult:
     output: str
     error: str
     exit_code: int
+    timed_out: bool = False
 
 
 class OpenCodeRunner:
@@ -167,6 +168,7 @@ class OpenCodeRunner:
                     f"Process timed out after {effective_timeout}s"
                 ),
                 exit_code=-1,
+                timed_out=True,
             )
         except FileNotFoundError:
             return RunResult(

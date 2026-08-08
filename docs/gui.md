@@ -65,6 +65,8 @@ Shows the selected agent's `.md` file with Markdown formatting rendered using th
 | **Save Workflow** | Opens a file dialog to save the current workflow |
 | **Execute** | Runs the current workflow in the engine (logs to console) |
 | **Stop** | Signals the engine to stop after the current agent finishes |
+| **Continue** | Enabled after a run stops with a resumable reason. Opens a run-picker dialog (or asks for a log file) and resumes the selected run from its checkpoint |
+| **LoopLog** | Opens the standalone LoopLog viewer for the active run's log |
 
 ## CLI Mode
 
@@ -73,3 +75,20 @@ Use `--cli` to skip the GUI entirely:
 ```bash
 python openloop.py --cli --workflow workflows/test_generation.json
 ```
+
+## Continue (resuming interrupted runs)
+
+After a run stops abnormally, the **Continue** button becomes active. Clicking
+it lists the available checkpoints (`openloop-run-*.json`) found in the
+configured log directory, each annotated with its run id and termination
+reason. Picking one resumes that run at its last completed agent boundary.
+
+Checkpoints whose termination reason is not allowed by the `resume_reasons`
+config filter are excluded from the list (and the Continue button stays
+disabled for them), matching the CLI behavior.
+
+If no checkpoints are found, the GUI offers to pick an OpenLoop `.log` file
+instead and derives its checkpoint path by swapping the extension.
+
+See [`resume.md`](resume.md) for the full resume mechanics and the
+`resume_reasons` config setting.

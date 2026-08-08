@@ -93,7 +93,7 @@ def _make_mock_agent_loader(agents: dict | None = None):
 
     def get_agent(name):
         prompt = agents.get(name, "You are a default agent.")
-        return type("A", (), {"name": name, "role": "", "system_prompt": prompt})()
+        return type("A", (), {"name": name, "can_complete": True, "role": "auditor", "system_prompt": prompt})()
 
     loader.get_agent.side_effect = get_agent
     return loader
@@ -204,7 +204,7 @@ def test_malformed_agent_output():
         "max_loops": 1,
         "end_state_condition": "is_complete == True",
     })
-    assert state.termination_reason == "max_loops_reached"
+    assert state.termination_reason == "missing_state:a"
     assert state.is_complete is False
     assert state.iteration == 1
 
@@ -355,6 +355,183 @@ def test_execute_workflow_from_file():
     assert state.is_complete is True
 
 
+def _make_resume_agent_loader(agents: dict | None = None):
+    """Mock loader whose agents are completion-authorized (role auditor)."""
+    agents = agents or {"a": "Agent"}
+    loader = MagicMock()
+
+    def get_agent(name):
+        prompt = agents.get(name, "You are a default agent.")
+        return type("A", (), {"name": name, "role": "auditor", "can_complete": True, "system_prompt": prompt})()
+
+    loader.get_agent.side_effect = get_agent
+    return loader
+
+
+def test_resume_after_agent_error():
+    """Checkpoint is written on agent_error and resume finishes the run."""
+    from core.engine import ExecutionEngine
+
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = ExecutionEngine(log_dir=tmp)
+        engine.runner = _make_mock_runner([
+            {"success": True, "output": '<state_update>{"payload": {"step": 1}}</state_update>'},
+            {"success": False, "output": ""},
+        ])
+        engine.agent_loader = _make_resume_agent_loader({"a": "A", "b": "B"})
+        state = engine.execute_workflow_data({
+            "loop_agents": ["a", "b"],
+            "max_loops": 5,
+            "end_state_condition": "is_complete == True",
+        })
+        assert state.termination_reason == "agent_error:b"
+        checkpoint = engine._checkpoint_path
+        assert checkpoint is not None and checkpoint.exists()
+
+        engine2 = ExecutionEngine(log_dir=tmp)
+        engine2.runner = _make_mock_runner([
+            {"success": True, "output": '<state_update>{"is_complete": true, "payload": {"step": 2}}</state_update>'},
+        ])
+        engine2.agent_loader = _make_resume_agent_loader({"a": "A", "b": "B"})
+        state2 = engine2.execute_resume(checkpoint)
+        assert state2.termination_reason == "completed"
+        assert state2.iteration == 1
+        assert state2.payload.get("step") == 2
+        assert not checkpoint.exists()
+
+
+def test_resume_mid_iteration_does_not_reincrement():
+    """Resuming mid-iteration continues from the failed agent without
+    incrementing the iteration number."""
+    from core.engine import ExecutionEngine
+
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = ExecutionEngine(log_dir=tmp)
+        engine.runner = _make_mock_runner([
+            {"success": True, "output": '<state_update>{"is_complete": false}</state_update>'},
+            {"success": False, "output": ""},
+        ])
+        engine.agent_loader = _make_resume_agent_loader({"a": "A", "b": "B"})
+        state = engine.execute_workflow_data({
+            "loop_agents": ["a", "b"],
+            "max_loops": 5,
+            "end_state_condition": "is_complete == True",
+        })
+        assert state.termination_reason == "agent_error:b"
+        checkpoint = engine._checkpoint_path
+
+        engine2 = ExecutionEngine(log_dir=tmp)
+        engine2.runner = _make_mock_runner([
+            {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+        ])
+        engine2.agent_loader = _make_resume_agent_loader({"a": "A", "b": "B"})
+        state2 = engine2.execute_resume(checkpoint)
+        assert state2.iteration == 1
+        assert state2.termination_reason == "completed"
+
+
+def test_resume_max_loops_override():
+    """Resuming max_loops_reached continues when given a higher limit."""
+    from core.engine import ExecutionEngine
+
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = ExecutionEngine(log_dir=tmp)
+        engine.runner = _make_mock_runner([
+            {"success": True, "output": '<state_update>{"is_complete": false}</state_update>'},
+        ])
+        engine.agent_loader = _make_resume_agent_loader({"a": "A"})
+        state = engine.execute_workflow_data({
+            "loop_agents": ["a"],
+            "max_loops": 2,
+            "end_state_condition": "is_complete == True",
+        })
+        assert state.termination_reason == "max_loops_reached"
+        checkpoint = engine._checkpoint_path
+
+        engine2 = ExecutionEngine(log_dir=tmp)
+        engine2.runner = _make_mock_runner([
+            {"success": True, "output": '<state_update>{"is_complete": false}</state_update>'},
+            {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+        ])
+        engine2.agent_loader = _make_resume_agent_loader({"a": "A"})
+        state2 = engine2.execute_resume(checkpoint, max_loops_override=5)
+        assert state2.termination_reason == "completed"
+        assert state2.iteration == 4
+
+
+def test_resume_timeout_reason():
+    """A timed-out agent produces a timeout:<name>:<sec> reason."""
+    from core.engine import ExecutionEngine
+
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = ExecutionEngine(log_dir=tmp, timeout=60)
+        engine.runner = MagicMock()
+        engine.runner.run.side_effect = lambda *a, **kw: type("R", (), {
+            "success": False, "output": "", "error": "timed out",
+            "exit_code": -1, "timed_out": True,
+        })()
+        engine.agent_loader = _make_resume_agent_loader({"a": "A"})
+        state = engine.execute_workflow_data({
+            "loop_agents": ["a"],
+            "max_loops": 5,
+            "end_state_condition": "is_complete == True",
+        })
+        assert state.termination_reason == "timeout:a:60"
+
+
+def test_resume_log_continuation():
+    """Resumed run appends a second <openloop_log> root with a marker."""
+    from core.engine import ExecutionEngine
+
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = ExecutionEngine(log_dir=tmp)
+        engine.runner = _make_mock_runner([
+            {"success": True, "output": '<state_update>{"is_complete": false}</state_update>'},
+            {"success": False, "output": ""},
+        ])
+        engine.agent_loader = _make_resume_agent_loader({"a": "A", "b": "B"})
+        engine.execute_workflow_data({
+            "loop_agents": ["a", "b"],
+            "max_loops": 5,
+            "end_state_condition": "is_complete == True",
+        })
+        log_path = engine._log_path
+        checkpoint = engine._checkpoint_path
+
+        engine2 = ExecutionEngine(log_dir=tmp)
+        engine2.runner = _make_mock_runner([
+            {"success": True, "output": '<state_update>{"is_complete": true}</state_update>'},
+        ])
+        engine2.agent_loader = _make_resume_agent_loader({"a": "A", "b": "B"})
+        engine2.execute_resume(checkpoint)
+
+        text = log_path.read_text(encoding="utf-8")
+        assert text.count("<openloop_log>") == 2
+        assert "# OPENLOOP RESUMED" in text
+
+
+def test_resume_blocked_by_reason_filter():
+    """resume_reasons config filter blocks resuming disallowed reasons."""
+    from core.config import Config
+    from core.engine import ExecutionEngine
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = Config(log_dir=tmp, resume_reasons=["stopped"])
+        engine = ExecutionEngine(config=cfg, log_dir=tmp)
+        engine.runner = _make_mock_runner([{"success": False, "output": ""}])
+        engine.agent_loader = _make_resume_agent_loader({"a": "A"})
+        engine.execute_workflow_data({
+            "loop_agents": ["a"],
+            "max_loops": 5,
+            "end_state_condition": "is_complete == True",
+        })
+        try:
+            engine.execute_resume(engine._checkpoint_path)
+            raise AssertionError("Expected resume to be blocked")
+        except ValueError:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Tier 2 — System Integration (requires `opencode` in PATH)
 # ---------------------------------------------------------------------------
@@ -447,6 +624,7 @@ def test_all_core_modules_import():
     import core.agent
     import core.runner
     import core.engine
+    import core.checkpoint
     # Smoke-test public API
     assert core.config.Config is not None
     assert core.state.WorkflowState is not None
@@ -454,6 +632,7 @@ def test_all_core_modules_import():
     assert core.agent.AgentLoader is not None
     assert core.runner.OpenCodeRunner is not None
     assert core.engine.ExecutionEngine is not None
+    assert core.checkpoint.CheckpointData is not None
 
 
 def test_entry_point_parses_args():
@@ -536,6 +715,12 @@ def main():
         test_preparation_agent,
         test_finalization_agent,
         test_execute_workflow_from_file,
+        test_resume_after_agent_error,
+        test_resume_mid_iteration_does_not_reincrement,
+        test_resume_max_loops_override,
+        test_resume_timeout_reason,
+        test_resume_log_continuation,
+        test_resume_blocked_by_reason_filter,
     ]:
         test(fn.__name__.replace("_", " ").replace("test ", ""), fn)
     failed += summary()
