@@ -14,9 +14,14 @@ python openloop.py --cli --workflow wf.json --opencode-defaults '{"model":"gpt-4
 ### Tests
 
 ```powershell
-pytest tests\test_all.py                                    # unit tests (fast)
-python tests\test_integration.py                             # integration (custom runner, Tier 2 needs `opencode` in PATH)
+pytest tests/                                          # all tests (unit + integration)
+pytest tests/ -m "not tier2"                           # skip the `opencode` tier
+pytest tests/test_all.py                               # unit tests only
 ```
+
+Integration tests are tiered with pytest markers (`tier1`/`tier2`/`tier3`);
+`tier2` needs `opencode` in PATH and is auto-skipped when it is missing.
+The GUI tests skip when `tkinter` is not available.
 
 ## Structure
 

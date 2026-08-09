@@ -15,6 +15,7 @@ from tkinter import (
     E,
     HORIZONTAL,
     VERTICAL,
+    Y,
     BooleanVar,
     Button,
     Canvas,
@@ -1206,11 +1207,21 @@ class WorkflowApp:
             self._log_queue.put(("__done__", None))
 
     def _pick_resume_file(self) -> Optional[Path]:
-        """Modal dialog listing resumable checkpoints in the log dir.
+        """Choose a checkpoint to resume.
 
-        Returns the chosen checkpoint path, or None when cancelled.
+        Prefers the checkpoint that matches the current run's active log
+        (auto-selected, never a manual list). Only when that checkpoint is
+        missing or invalid does the user get to pick from the log dir or a
+        file browser. Returns the chosen checkpoint path or None when
+        cancelled.
         """
         from core.checkpoint import checkpoint_path_for
+
+        # Auto-selected checkpoint matching the active log (#47/#51). This
+        # is the only path the Continue button normally uses.
+        auto = self._resume_checkpoint_path
+        if auto is not None and auto.exists() and self._is_resumable(auto):
+            return self._confirm_resume(auto)
 
         log_dir = self._log_dir_var.get().strip() or ".openloop"
         p = Path(log_dir)
@@ -1219,12 +1230,7 @@ class WorkflowApp:
             if wd:
                 p = Path(wd) / log_dir
 
-        candidates: list[Path] = []
-        if p.is_dir():
-            candidates = [
-                c for c in sorted(p.glob("openloop-run-*.json"))
-                if self._is_resumable(c)
-            ]
+        candidates = self._collect_resume_candidates()
 
         # Also accept an explicit log file picked by the user.
         if not candidates:
@@ -1251,41 +1257,96 @@ class WorkflowApp:
         if len(candidates) == 1:
             return self._confirm_resume(candidates[0])
 
+        return self._pick_resume_file_from_list(candidates)
+
+    def _collect_resume_candidates(self) -> list[Path]:
+        """Resumable checkpoints from the configured log dir, newest first."""
+        from core.checkpoint import CheckpointData
+
+        log_dir = self._log_dir_var.get().strip() or ".openloop"
+        p = Path(log_dir)
+        if not p.is_absolute():
+            wd = self._workdir_var.get().strip()
+            if wd:
+                p = Path(wd) / log_dir
+
+        candidates: list[Path] = []
+        if p.is_dir():
+            candidates = [
+                c for c in p.glob("openloop-run-*.json")
+                if self._is_resumable(c)
+            ]
+
+        def _created(c: Path) -> str:
+            ck = CheckpointData.load(c)
+            return (ck.created_at if ck else "") or ""
+
+        candidates.sort(key=_created, reverse=True)
+        return candidates
+
+    def _pick_resume_file_from_list(self, candidates: list[Path]) -> Optional[Path]:
+        """Modal dialog listing resumable checkpoints with metadata.
+
+        Each row shows the checkpoint file name, the short run id, and where
+        the run stopped. Returns the chosen checkpoint path, or None when
+        cancelled.
+        """
+        from core.checkpoint import CheckpointData
+
         dialog = Toplevel(self._root)
-        dialog.title("Resume Run")
-        dialog.geometry("520x320")
+        dialog.title("Resume Run — Select a Checkpoint")
+        dialog.geometry("780x360")
         dialog.transient(self._root)
         dialog.grab_set()
 
-        Label(dialog, text="Select a run to continue:").pack(
+        Label(dialog, text="Select a checkpoint to continue:").pack(
             anchor=W, padx=8, pady=(8, 2)
         )
-        listbox = Listbox(dialog, width=70, height=12)
-        listbox.pack(fill="both", expand=True, padx=8, pady=4)
 
-        default_idx = 0
-        for i, c in enumerate(candidates):
-            try:
-                ck = CheckpointData.load(c)
-                label = (
-                    f"{c.name}  [{ck.run_id[:8] or '?'} | "
-                    f"{ck.state.get('termination_reason', '?')}]"
-                )
-            except Exception:
-                label = c.name
-            if c == self._resume_checkpoint_path:
-                default_idx = i
-            listbox.insert(END, label)
-        listbox.selection_set(default_idx)
+        tree = ttk.Treeview(
+            dialog,
+            columns=("checkpoint", "run", "details"),
+            show="headings",
+            height=14,
+        )
+        tree.heading("checkpoint", text="Checkpoint")
+        tree.heading("run", text="Run")
+        tree.heading("details", text="Stopped at")
+        tree.column("checkpoint", width=340, anchor=W)
+        tree.column("run", width=90, anchor=W)
+        tree.column("details", width=320, anchor=W)
+
+        vsb = ttk.Scrollbar(dialog, orient=VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.pack(fill="both", expand=True, padx=8, pady=4)
+        vsb.pack(side=RIGHT, fill=Y)
+
+        for c in candidates:
+            ck = CheckpointData.load(c)
+            if ck is None:
+                tree.insert("", END, values=(c.name, "?", "unreadable"))
+                continue
+            position = ck.position or {}
+            created = (ck.created_at or "?")[:16].replace("T", " ")
+            run = (ck.run_id or "?")[:8]
+            details = (
+                f"{ck.state.get('termination_reason', '?')} · "
+                f"phase {position.get('phase', '?')}/"
+                f"{position.get('iteration', '?')} · created {created}"
+            )
+            tree.insert("", END, values=(c.name, run, details))
+
+        if candidates:
+            tree.selection_set(tree.get_children()[0])
 
         result: dict = {"path": None}
         btn_frame = Frame(dialog)
         btn_frame.pack(fill="x", padx=8, pady=(0, 8))
 
         def _ok():
-            sel = listbox.curselection()
+            sel = tree.selection()
             if sel:
-                result["path"] = candidates[sel[0]]
+                result["path"] = candidates[tree.index(sel[0])]
             dialog.destroy()
 
         def _cancel():
@@ -1295,7 +1356,9 @@ class WorkflowApp:
         Button(btn_frame, text="Cancel", command=_cancel).pack(
             side=LEFT, padx=4
         )
-        listbox.bind("<Double-Button-1>", lambda e: _ok())
+        tree.bind("<Double-Button-1>", lambda e: _ok())
+        dialog.bind("<Return>", lambda e: _ok())
+        dialog.bind("<Escape>", lambda e: _cancel())
         dialog.wait_window()
         return result["path"]
 
@@ -1320,6 +1383,8 @@ class WorkflowApp:
         phase = position.get("phase", "?")
         iteration = position.get("iteration", "?")
         created = checkpoint.created_at or "?"
+        workflow_name = (checkpoint.workflow or {}).get("name") or "?"
+        log_path = checkpoint.log_path or "?"
 
         dialog = Toplevel(self._root)
         dialog.title("Resume Run")
@@ -1328,17 +1393,20 @@ class WorkflowApp:
 
         Label(
             dialog,
-            text=f"Run {run_id} was interrupted "
-            f"({reason}).\nResume it with this checkpoint?",
+            text=(
+                f"Workflow \"{workflow_name}\" will be continued\n"
+                f"using checkpoint {checkpoint_path.name}."
+            ),
             justify=LEFT,
         ).pack(anchor=W, padx=12, pady=(12, 4))
         Label(
             dialog,
             text=(
-                f"Checkpoint: {checkpoint_path.name}\n"
-                f"  phase:      {phase}\n"
-                f"  iteration:  {iteration}\n"
-                f"  created:    {created}"
+                f"Log file:     {log_path}\n"
+                f"Run:          {run_id}\n"
+                f"Interrupted:  {reason}\n"
+                f"Resume at:    phase {phase}, iteration {iteration}\n"
+                f"Created:      {created}"
             ),
             justify=LEFT,
             font=("TkDefaultFont", 9),
@@ -1378,7 +1446,15 @@ class WorkflowApp:
         return self._pick_other_resume_file()
 
     def _pick_other_resume_file(self) -> Optional[Path]:
-        """Let the user browse for an arbitrary checkpoint/log to resume."""
+        """Let the user pick a different checkpoint to resume.
+
+        Shows the resumable checkpoints from the log dir with metadata;
+        falls back to a file browser when none are available.
+        """
+        candidates = self._collect_resume_candidates()
+        if candidates:
+            return self._pick_resume_file_from_list(candidates)
+
         from core.checkpoint import checkpoint_path_for
 
         path = filedialog.askopenfilename(
