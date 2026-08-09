@@ -7,7 +7,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
-import tkinter as tk
+
+try:
+    import tkinter as tk
+except ImportError:  # pragma: no cover - headless environments
+    tk = None
 
 
 # ===========================================================================
@@ -1776,6 +1780,7 @@ class TestExecutionEngine:
         })
         assert captured == []
 
+    @pytest.mark.skipif(tk is None, reason="tkinter not available")
     def test_log_phase_banner_inside_agent(self, tmp_path):
         from core.engine import ExecutionEngine
         from core.runner import OpenCodeOptions
@@ -1858,6 +1863,7 @@ class TestExecutionEngine:
                 f"agent {agent.label} is missing its banner system block"
             )
 
+    @pytest.mark.skipif(tk is None, reason="tkinter not available")
     def test_effective_state_block_written_per_agent(self, tmp_path):
         from core.engine import ExecutionEngine
         from core.runner import OpenCodeOptions
@@ -1977,6 +1983,7 @@ class TestExecutionEngine:
             engine.state.termination_reason = reason
             assert engine._termination_summary_line() == expected
 
+    @pytest.mark.skipif(tk is None, reason="tkinter not available")
     def test_log_summary_block(self, tmp_path):
         from core.engine import ExecutionEngine
         from core.runner import OpenCodeOptions
@@ -2781,6 +2788,7 @@ class TestOpenLoopEntryPoint:
             tmp_path / "run.json", max_loops_override=20
         )
 
+    @pytest.mark.skipif(tk is None, reason="tkinter not available")
     def test_main_gui_mode(self):
         from openloop import main
 
@@ -2795,6 +2803,7 @@ class TestOpenLoopEntryPoint:
             main([])
             mock_app.run.assert_called_once()
 
+    @pytest.mark.skipif(tk is None, reason="tkinter not available")
     def test_main_gui_keyboard_interrupt(self):
         from openloop import main
 
@@ -2835,6 +2844,7 @@ class TestOpenLoopEntryPoint:
 # ===========================================================================
 
 
+@pytest.mark.skipif(tk is None, reason="tkinter not available")
 class TestWorkflowApp:
     def test_initialization(self):
         with (
@@ -3392,6 +3402,7 @@ class TestWorkflowApp:
 # ===========================================================================
 
 
+@pytest.mark.skipif(tk is None, reason="tkinter not available")
 class TestLoopLogViewer:
     _XML_LOG = (
         "<openloop_log>\n"
@@ -5224,7 +5235,7 @@ class TestLoopLogViewer:
 
     # -- Point: MRU recent logs --
 
-    def test_record_mru_deduplicates_and_caps(self):
+    def test_record_mru_deduplicates_and_caps(self, tmp_path):
         from tools.looplog import LoopLogApp
 
         app = object.__new__(LoopLogApp)
@@ -5232,21 +5243,14 @@ class TestLoopLogViewer:
         app._update_mru_menu = MagicMock()
         app._save_mru = MagicMock()
 
-        app._record_mru(Path(r"C:\logs\a.log"))
-        app._record_mru(Path(r"C:\logs\b.log"))
-        app._record_mru(Path(r"C:\logs\a.log"))
-        app._record_mru(Path(r"C:\logs\c.log"))
-        app._record_mru(Path(r"C:\logs\d.log"))
-        app._record_mru(Path(r"C:\logs\e.log"))
-        app._record_mru(Path(r"C:\logs\f.log"))
+        for name in ["a", "b", "a", "c", "d", "e", "f"]:
+            app._record_mru(tmp_path / f"{name}.log")
 
-        assert app._mru_paths == [
-            r"C:\logs\f.log",
-            r"C:\logs\e.log",
-            r"C:\logs\d.log",
-            r"C:\logs\c.log",
-            r"C:\logs\a.log",
+        expected = [
+            str((tmp_path / f"{name}.log").resolve())
+            for name in ["f", "e", "d", "c", "a"]
         ]
+        assert app._mru_paths == expected
         assert len(app._mru_paths) == 5
         assert app._save_mru.call_count == 7
 

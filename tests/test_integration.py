@@ -1,14 +1,14 @@
-"""OpenLoop Integration Tests.
+"""OpenLoop Integration Tests (pytest).
 
-Usage:
-    python tests/integration.py
+Tiered via markers; run with pytest:
 
-Zero external dependencies. Uses plain assert.
-Tier 2 requires `opencode` in PATH (skipped if missing).
+    pytest tests/test_integration.py            # all integration tests
+    pytest tests/test_integration.py -m tier2   # only the `opencode` tier
+
+Tier 2 requires `opencode` in PATH and is skipped when it is missing.
 """
 
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -17,52 +17,10 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-
-# ---------------------------------------------------------------------------
-# Test runner
-# ---------------------------------------------------------------------------
-
-PASS = "\033[92mPASS\033[0m"
-FAIL = "\033[91mFAIL\033[0m"
-SKIP = "\033[93mSKIP\033[0m"
-
-_total = 0
-_passed = 0
-_failed = 0
-_skipped = 0
-
-
-def test(name: str, func):
-    global _total, _passed, _failed
-    _total += 1
-    try:
-        func()
-        _passed += 1
-        print(f"    [{PASS}] {name}")
-    except Exception as exc:
-        _failed += 1
-        print(f"    [{FAIL}] {name}: {exc}")
-
-
-def skip(name: str, reason: str = "opencode not found in PATH"):
-    global _total, _skipped
-    _total += 1
-    _skipped += 1
-    print(f"    [{SKIP}] {name} — {reason}")
-
-
-def heading(label: str):
-    print(f"\n  {label}")
-
-
-def summary():
-    print(
-        f"\n  Result: {_passed}/{_total - _skipped} passed, "
-        f"{_skipped} skipped, {_failed} failed"
-    )
-    return _failed
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +57,7 @@ def _make_mock_agent_loader(agents: dict | None = None):
     return loader
 
 
+@pytest.mark.tier1
 def test_full_pipeline():
     """Engine loads agents, runs loop, merges state, terminates."""
     from core.engine import ExecutionEngine, WorkflowConfig
@@ -120,6 +79,7 @@ def test_full_pipeline():
     assert state.payload.get("step") == 1
 
 
+@pytest.mark.tier1
 def test_loop_max_iterations():
     """Loop exhausts max_loops when agents never set is_complete."""
     from core.engine import ExecutionEngine
@@ -139,6 +99,7 @@ def test_loop_max_iterations():
     assert state.termination_reason == "max_loops_reached"
 
 
+@pytest.mark.tier1
 def test_state_passed_between_agents():
     """Each agent's prompt includes the current state from the previous run."""
     from core.engine import ExecutionEngine
@@ -171,6 +132,7 @@ def test_state_passed_between_agents():
     assert '"seen": 1' in prompts[1]  # state from agent a merged before b runs
 
 
+@pytest.mark.tier1
 def test_agent_failure():
     """agent_error is set when runner returns failure."""
     from core.engine import ExecutionEngine
@@ -189,6 +151,7 @@ def test_agent_failure():
     assert state.termination_reason == "agent_error:a"
 
 
+@pytest.mark.tier1
 def test_malformed_agent_output():
     """No crash when agent output lacks state_update."""
     from core.engine import ExecutionEngine
@@ -209,6 +172,7 @@ def test_malformed_agent_output():
     assert state.iteration == 1
 
 
+@pytest.mark.tier1
 def test_end_condition_payload_expression():
     """end_state_condition evaluates payload expressions."""
     from core.engine import ExecutionEngine
@@ -230,6 +194,7 @@ def test_end_condition_payload_expression():
     assert state.payload["coverage"] == 90
 
 
+@pytest.mark.tier1
 def test_stop_event():
     """Stop event terminates loop between iterations."""
     from core.engine import ExecutionEngine
@@ -266,6 +231,7 @@ def test_stop_event():
     assert results[0] == "stopped"
 
 
+@pytest.mark.tier1
 def test_preparation_agent():
     """Preparation agent runs once before the loop."""
     from core.engine import ExecutionEngine
@@ -301,6 +267,7 @@ def test_preparation_agent():
     assert len(calls) == 2  # prep + one loop
 
 
+@pytest.mark.tier1
 def test_finalization_agent():
     """Finalization runs on completion."""
     from core.engine import ExecutionEngine
@@ -334,6 +301,7 @@ def test_finalization_agent():
     assert len(calls) == 2  # loop agent + finalization
 
 
+@pytest.mark.tier1
 def test_execute_workflow_from_file():
     """Engine.execute_workflow loads from file path."""
     from core.engine import ExecutionEngine
@@ -368,6 +336,7 @@ def _make_resume_agent_loader(agents: dict | None = None):
     return loader
 
 
+@pytest.mark.tier1
 def test_resume_after_agent_error():
     """Checkpoint is written on agent_error and resume finishes the run."""
     from core.engine import ExecutionEngine
@@ -400,6 +369,7 @@ def test_resume_after_agent_error():
         assert not checkpoint.exists()
 
 
+@pytest.mark.tier1
 def test_resume_mid_iteration_does_not_reincrement():
     """Resuming mid-iteration continues from the failed agent without
     incrementing the iteration number."""
@@ -430,6 +400,7 @@ def test_resume_mid_iteration_does_not_reincrement():
         assert state2.termination_reason == "completed"
 
 
+@pytest.mark.tier1
 def test_resume_max_loops_override():
     """Resuming max_loops_reached continues when given a higher limit."""
     from core.engine import ExecutionEngine
@@ -459,6 +430,7 @@ def test_resume_max_loops_override():
         assert state2.iteration == 4
 
 
+@pytest.mark.tier1
 def test_resume_timeout_reason():
     """A timed-out agent produces a timeout:<name>:<sec> reason."""
     from core.engine import ExecutionEngine
@@ -479,6 +451,7 @@ def test_resume_timeout_reason():
         assert state.termination_reason == "timeout:a:60"
 
 
+@pytest.mark.tier1
 def test_resume_log_continuation():
     """Resumed run appends a second <openloop_log> root with a marker."""
     from core.engine import ExecutionEngine
@@ -510,6 +483,7 @@ def test_resume_log_continuation():
         assert "# OPENLOOP RESUMED" in text
 
 
+@pytest.mark.tier1
 def test_resume_blocked_by_reason_filter():
     """resume_reasons config filter blocks resuming disallowed reasons."""
     from core.config import Config
@@ -547,25 +521,41 @@ def _opencode_available() -> bool:
         return False
 
 
+def _gui_available() -> bool:
+    """True when a real Tk display can be opened (headless-safe)."""
+    try:
+        from tkinter import TclError, Tk
+        root = Tk()
+    except Exception:
+        return False
+    else:
+        try:
+            root.destroy()
+        except TclError:
+            pass
+        return True
+
+
+@pytest.mark.tier2
+@pytest.mark.skipif(
+    not _opencode_available(), reason="opencode not found in PATH"
+)
 def test_opencode_runner_basic():
     """OpenCodeRunner runs a trivial prompt and returns output."""
-    if not _opencode_available():
-        skip("OpenCodeRunner basic prompt")
-        return
-
     from core.runner import OpenCodeRunner
+
     runner = OpenCodeRunner(timeout=30)
     result = runner.run("Say 'hello' and nothing else.")
     assert result.success, f"opencode run failed: {result.error}"
     assert "hello" in result.output.lower()
 
 
+@pytest.mark.tier2
+@pytest.mark.skipif(
+    not _opencode_available(), reason="opencode not found in PATH"
+)
 def test_opencode_pipeline_end_to_end():
     """Full workflow prompt builds and executes without runner error."""
-    if not _opencode_available():
-        skip("Full workflow end-to-end")
-        return
-
     from core.runner import OpenCodeRunner
 
     runner = OpenCodeRunner(timeout=120)
@@ -591,6 +581,7 @@ def test_opencode_pipeline_end_to_end():
 # Tier 3 — Artifact Verification
 # ---------------------------------------------------------------------------
 
+@pytest.mark.tier3
 def test_amala_agent_parses():
     from core.agent import AgentLoader
     loader = AgentLoader(str(ROOT / "agents"))
@@ -600,6 +591,7 @@ def test_amala_agent_parses():
     assert "pytest" in amala.system_prompt
 
 
+@pytest.mark.tier3
 def test_vera_agent_parses():
     from core.agent import AgentLoader
     loader = AgentLoader(str(ROOT / "agents"))
@@ -609,6 +601,7 @@ def test_vera_agent_parses():
     assert "VERA" in vera.system_prompt
 
 
+@pytest.mark.tier3
 def test_example_workflow_loads():
     from core.engine import WorkflowConfig
     wf = WorkflowConfig.load(str(ROOT / "workflows" / "test_generation.json"))
@@ -617,6 +610,7 @@ def test_example_workflow_loads():
     assert wf.preparation_agents == []
 
 
+@pytest.mark.tier3
 def test_all_core_modules_import():
     import core.config
     import core.state
@@ -635,6 +629,7 @@ def test_all_core_modules_import():
     assert core.checkpoint.CheckpointData is not None
 
 
+@pytest.mark.tier3
 def test_entry_point_parses_args():
     from openloop import parse_args
 
@@ -648,6 +643,8 @@ def test_entry_point_parses_args():
     assert args.workflow == "test.json"
 
 
+@pytest.mark.tier3
+@pytest.mark.skipif(not _gui_available(), reason="no Tk display available")
 def test_markdown_renderer():
     from tkinter import Tk, Text, font
     root = Tk()
@@ -690,65 +687,3 @@ line two
             f"Codeblock tag font ({tag_family}) should be resolved mono ({mono_family})"
     finally:
         root.destroy()
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def main():
-    failed = 0
-
-    print("=" * 60)
-    print("  OpenLoop Integration Tests")
-    print("=" * 60)
-
-    heading("Tier 1 — Module Integration")
-    for fn in [
-        test_full_pipeline,
-        test_loop_max_iterations,
-        test_state_passed_between_agents,
-        test_agent_failure,
-        test_malformed_agent_output,
-        test_end_condition_payload_expression,
-        test_stop_event,
-        test_preparation_agent,
-        test_finalization_agent,
-        test_execute_workflow_from_file,
-        test_resume_after_agent_error,
-        test_resume_mid_iteration_does_not_reincrement,
-        test_resume_max_loops_override,
-        test_resume_timeout_reason,
-        test_resume_log_continuation,
-        test_resume_blocked_by_reason_filter,
-    ]:
-        test(fn.__name__.replace("_", " ").replace("test ", ""), fn)
-    failed += summary()
-
-    heading("Tier 2 — System Integration (opencode)")
-    if _opencode_available():
-        test("opencode runner basic prompt", test_opencode_runner_basic)
-        test("pipeline end-to-end", test_opencode_pipeline_end_to_end)
-    else:
-        skip("opencode runner basic prompt")
-        skip("pipeline end-to-end")
-    failed += summary()
-
-    heading("Tier 3 — Artifact Verification")
-    for fn in [
-        test_amala_agent_parses,
-        test_vera_agent_parses,
-        test_example_workflow_loads,
-        test_all_core_modules_import,
-        test_entry_point_parses_args,
-        test_markdown_renderer,
-    ]:
-        test(fn.__name__.replace("_", " ").replace("test ", ""), fn)
-    failed += summary()
-
-    print()
-    return 1 if failed else 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
