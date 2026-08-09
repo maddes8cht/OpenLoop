@@ -5430,6 +5430,29 @@ class TestFlowStatusModule:
             ["a", "</openloop_log>"], "agent error"
         ) == "error"
 
+    def test_title_native_color_supported(self, monkeypatch):
+        from ui import status
+
+        assert isinstance(status.title_native_color_supported(), bool)
+        monkeypatch.setattr(status.os, "name", "nt")
+        assert status.title_native_color_supported() is True
+        monkeypatch.setattr(status.os, "name", "posix")
+        assert status.title_native_color_supported() is False
+
+    def test_apply_banner_holds_steady_color_never_white(self):
+        from ui import status
+
+        banner = MagicMock()
+        status.apply_banner(banner, MagicMock(), "interrupted")
+
+        assert banner.configure.called
+        for call in banner.configure.call_args_list:
+            assert call.kwargs["background"] == status.STATE_COLORS["interrupted"]
+        assert not any(
+            call.kwargs.get("background") == "#ffffff"
+            for call in banner.configure.call_args_list
+        )
+
 
 # ===========================================================================
 # tools.looplog — flow-status banner
@@ -5462,6 +5485,89 @@ class TestLoopLogStatusBanner:
         assert app._flow_state == "idle"
         app.root.title.assert_called_once_with("IDLE — LoopLog")
         app._banner.configure.assert_called()
+
+    def test_build_ui_omits_banner_on_native_titlebar(self):
+        from tools import looplog
+
+        captured = {}
+
+        def fake_treeview(parent, **kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        def fake_widget(*args, **kwargs):
+            return MagicMock()
+
+        with (
+            patch.object(looplog.tk, "Tk", return_value=MagicMock()),
+            patch.object(looplog.status, "title_native_color_supported", return_value=True),
+            patch.object(looplog.ttk, "Treeview", side_effect=fake_treeview),
+            patch.object(looplog.tk, "Menu", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Frame", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Label", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Combobox", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Button", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Checkbutton", side_effect=fake_widget),
+            patch.object(looplog.ttk, "PanedWindow", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Scrollbar", side_effect=fake_widget),
+            patch.object(looplog.tk, "Text", side_effect=fake_widget),
+            patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
+            patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
+            patch.object(looplog.LoopLogApp, "_load_mru", lambda self: None),
+            patch.object(looplog.status, "create_banner", return_value=MagicMock()),
+        ):
+            app = object.__new__(looplog.LoopLogApp)
+            app.root = looplog.tk.Tk()
+            app._start_hide_system = False
+            app._start_omit_stderr = False
+            app._start_omit_state = False
+            app._start_omit_state_update = False
+            app._start_show_all = False
+            app._start_wrap_lines = False
+            app._start_filter = "all"
+            app._build_ui()
+
+        assert app._banner is None
+
+    def test_build_ui_creates_banner_without_native_titlebar(self):
+        from tools import looplog
+
+        def fake_treeview(parent, **kwargs):
+            return MagicMock()
+
+        def fake_widget(*args, **kwargs):
+            return MagicMock()
+
+        with (
+            patch.object(looplog.tk, "Tk", return_value=MagicMock()),
+            patch.object(looplog.status, "title_native_color_supported", return_value=False),
+            patch.object(looplog.ttk, "Treeview", side_effect=fake_treeview),
+            patch.object(looplog.tk, "Menu", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Frame", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Label", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Combobox", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Button", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Checkbutton", side_effect=fake_widget),
+            patch.object(looplog.ttk, "PanedWindow", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Scrollbar", side_effect=fake_widget),
+            patch.object(looplog.tk, "Text", side_effect=fake_widget),
+            patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
+            patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
+            patch.object(looplog.LoopLogApp, "_load_mru", lambda self: None),
+            patch.object(looplog.status, "create_banner", return_value=MagicMock()),
+        ):
+            app = object.__new__(looplog.LoopLogApp)
+            app.root = looplog.tk.Tk()
+            app._start_hide_system = False
+            app._start_omit_stderr = False
+            app._start_omit_state = False
+            app._start_omit_state_update = False
+            app._start_show_all = False
+            app._start_wrap_lines = False
+            app._start_filter = "all"
+            app._build_ui()
+
+        assert app._banner is not None
 
     def test_refresh_status_completed_plays_sound(self, tmp_path):
         from tools import looplog

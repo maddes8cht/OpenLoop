@@ -562,6 +562,14 @@ class LoopLogApp:
         if path:
             self.load_log(path)
 
+        # DWM tint calls before the toplevel is actually painted are ignored,
+        # which made the initial state visible only at the first file update.
+        # Re-apply the current state once idle, again shortly after the first
+        # paint, and whenever the window gets mapped.
+        self.root.after_idle(self._refresh_status)
+        self.root.after(300, self._refresh_status)
+        self.root.bind("<Map>", lambda _e: self._refresh_status())
+
     # -- UI construction --
 
     def _build_ui(self) -> None:
@@ -611,9 +619,13 @@ class LoopLogApp:
         self.root.config(menu=menubar)
         self._load_mru()
 
-        # Flow-status banner (shared presentation with the OpenLoop GUI).
-        self._banner = status.create_banner(self.root)
-        self._banner.pack(fill=tk.X, side=tk.TOP)
+        # Flow-status banner: only where the native titlebar cannot carry the
+        # color (non-Windows). On Windows the titlebar is tinted instead.
+        if status.title_native_color_supported():
+            self._banner = None
+        else:
+            self._banner = status.create_banner(self.root)
+            self._banner.pack(fill=tk.X, side=tk.TOP)
 
         # Top bar: current file label + Filter + All toggle
         top = ttk.Frame(self.root, padding=(8, 4))
@@ -860,7 +872,7 @@ class LoopLogApp:
             if self._reload_preserving_selection():
                 self._watch_signature = sig
                 if self._is_log_complete():
-                    self._refresh_status(flash=True, sound=True)
+                    self._refresh_status(sound=True)
                     self._stop_watching()
                     return
 
@@ -893,8 +905,8 @@ class LoopLogApp:
         except Exception:
             return ""
 
-    def _refresh_status(self, *, flash: bool = False, sound: bool = False) -> None:
-        """Recompute the flow state from the loaded log and repaint the banner.
+    def _refresh_status(self, *, sound: bool = False) -> None:
+        """Recompute the flow state from the loaded log and repaint the UI.
 
         A log still being written reads as ``running``; a closed log gets its
         final state from the closing summary block.
@@ -909,7 +921,7 @@ class LoopLogApp:
         root = getattr(self, "root", None)
         status.apply_banner(
             getattr(self, "_banner", None), root, state,
-            flash=flash, sound=sound,
+            sound=sound,
         )
         if root is not None:
             root.title(f"{status.STATE_LABELS[state]} — LoopLog")

@@ -1,10 +1,15 @@
 """Shared flow-status presentation for the OpenLoop GUI and the LoopLog viewer.
 
-Both windows render the same states, colors, flash animation, system sounds and
-native frame tint so the user gets one consistent signal no matter which window
-they look at. Zero dependencies: the Windows-specific helpers use only stdlib
+Both windows render the same states, colors, system sounds and native frame
+tint so the user gets one consistent signal no matter which window they look
+at. Zero dependencies: the Windows-specific helpers use only stdlib
 ``ctypes``/``winsound`` and degrade silently where the API is unavailable
 (system sounds are Windows-only, the DWM frame tint is Windows 11).
+
+The colored status strip beneath the toolbar is only rendered on systems that
+can *not* tint the native titlebar (i.e. not Windows): there it is the only
+color carrier. On Windows the titlebar itself shows the state color, so the
+strip would only waste vertical space and is omitted.
 """
 
 import os
@@ -89,6 +94,15 @@ def detect_log_state(lines: list[str], summary_text: str) -> str:
 
 # ── Banner widget ─────────────────────────────────────────────────────
 
+def title_native_color_supported() -> bool:
+    """True when the native window titlebar can be tinted (Windows only).
+
+    Used to decide whether the colored status strip is rendered at all: where
+    the titlebar carries the color the strip adds nothing but vertical space.
+    """
+    return os.name == "nt"
+
+
 def create_banner(parent) -> "tkinter.Label":
     """A thin colored status strip pinned to the top of a Tk window.
 
@@ -109,12 +123,13 @@ def create_banner(parent) -> "tkinter.Label":
     return banner
 
 
-def apply_banner(banner, root, state: str, *, flash: bool = False,
-                 sound: bool = False) -> None:
-    """Repaint a status banner; optionally flash it and play a state sound.
+def apply_banner(banner, root, state: str, *, sound: bool = False) -> None:
+    """Repaint the status strip and native titlebar for a flow state.
 
-    ``sound`` honors the success/problem split: completed uses the success
-    sound, interrupted/error use the error sound.
+    Both the strip (on machines that render it) and the titlebar always hold
+    the steady state color -- they never flash to white, so the status signal
+    is not lost. ``sound`` honors the success/problem split: completed uses
+    the success sound, interrupted/error use the error sound.
     """
     color = STATE_COLORS[state]
     label = STATE_LABELS.get(state, state.upper())
@@ -124,31 +139,8 @@ def apply_banner(banner, root, state: str, *, flash: bool = False,
         except Exception:
             banner.configure(background=color)
     _apply_frame_tint(root, color)
-    if flash and banner is not None and hasattr(banner, "after"):
-        _flash_widget(banner, color, root)
-    if sound and banner is not None and state in TERMINAL_STATES:
+    if sound and state in TERMINAL_STATES:
         _play_state_sound(state)
-
-
-def _flash_widget(widget, root, color: str, frames: int = 3) -> None:
-    def _tick(step: int) -> None:
-        if step >= frames * 2:
-            try:
-                widget.configure(background=color)
-            except Exception:
-                pass
-            return
-        bright = "#ffffff" if step % 2 == 0 else color
-        try:
-            widget.configure(background=bright)
-        except Exception:
-            pass
-        try:
-            root.after(120, lambda: _tick(step + 1))
-        except Exception:
-            pass
-
-    _tick(0)
 
 
 def _play_state_sound(state: str) -> None:

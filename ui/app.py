@@ -198,6 +198,10 @@ class WorkflowApp:
         self._build_ui()
         self._root.after_idle(self._init_preview_collapsed)
         self._root.after_idle(lambda l=layout, fs=fullscreen: self._apply_layout(l, fs))
+        # DWM tint calls are dropped before the toplevel is painted; re-apply
+        # the (idle) state once idle and again shortly after the first paint.
+        self._root.after_idle(lambda: self._set_flow_state(self._flow_state))
+        self._root.after(300, lambda: self._set_flow_state(self._flow_state))
         self._load_config()
         self._refresh_agent_list()
         self._poll_log_queue()
@@ -230,9 +234,12 @@ class WorkflowApp:
         self._root.columnconfigure(0, weight=1)
         self._root.rowconfigure(2, weight=1)
 
-        # Flow-status banner (shared presentation with the LoopLog viewer).
-        self._banner = status.create_banner(self._root)
-        self._banner.grid(row=0, column=0, sticky=(W, E))
+        # Flow-status banner: only where the native titlebar cannot carry the
+        # color (non-Windows). On Windows the titlebar is tinted instead.
+        self._banner = None
+        if not status.title_native_color_supported():
+            self._banner = status.create_banner(self._root)
+            self._banner.grid(row=0, column=0, sticky=(W, E))
 
         # ---- Toolbar ----
         toolbar = Frame(self._root)
@@ -940,9 +947,8 @@ class WorkflowApp:
         state_label = status.STATE_LABELS.get(self._flow_state, "IDLE")
         self._root.title(f"{state_label} — {title}")
 
-    def _set_flow_state(self, state: str, *, flash: bool = False,
-                        sound: bool = False) -> None:
-        """Update the banner/title to a new flow state (idle/running/...)."""
+    def _set_flow_state(self, state: str, *, sound: bool = False) -> None:
+        """Update the banner/titlebar to a new flow state (idle/running/...)."""
         if state not in status.FLOW_STATES:
             state = "error"
         self._flow_state = state
@@ -950,7 +956,7 @@ class WorkflowApp:
         if root is not None:
             status.apply_banner(
                 getattr(self, "_banner", None), root, state,
-                flash=flash, sound=sound,
+                sound=sound,
             )
         self._update_title()
 
@@ -1106,7 +1112,7 @@ class WorkflowApp:
         )
         self._execution_thread.start()
 
-        self._set_flow_state("running", flash=True)
+        self._set_flow_state("running")
 
     def _make_engine(self):
         """Build an ExecutionEngine wired to the GUI log/state callbacks."""
@@ -1218,7 +1224,7 @@ class WorkflowApp:
         )
         self._execution_thread.start()
 
-        self._set_flow_state("running", flash=True)
+        self._set_flow_state("running")
 
     def _run_resume_engine(self, checkpoint_path) -> None:
         try:
@@ -1510,11 +1516,10 @@ class WorkflowApp:
         if engine is not None and getattr(engine, "state", None) is not None:
             term_reason = engine.state.termination_reason or ""
             is_complete = bool(engine.state.is_complete)
-        self._set_flow_state(
-            status.state_from_reason(term_reason, is_complete),
-            flash=True,
-            sound=True,
-        )
+            final_state = status.state_from_reason(term_reason, is_complete)
+        else:
+            final_state = "idle"
+        self._set_flow_state(final_state, sound=True)
 
     # ---- State Display (Live) ----
 
