@@ -58,9 +58,11 @@ python openloop.py --cli --resume .openloop/openloop-run-demo-20260101-120000.js
 ## GUI
 
 The **Continue** toolbar button enables after a run stops with a resumable
-reason. It lists available checkpoints in the log directory (annotated with
-run id + reason) and resumes the selection; if none are found it offers to
-pick a `.log` file directly.
+reason and only resumes the checkpoint that matches the run's own log. A
+confirmation dialog shows the workflow, log file, and checkpoint before
+resuming; **Select another file…** lists all resumable checkpoints in the
+log directory (annotated with run id, reason, phase/iteration, and creation
+time). If none are found it offers to pick a `.log` file directly.
 
 ## Configuration: `resume_reasons`
 

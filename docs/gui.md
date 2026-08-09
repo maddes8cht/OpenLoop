@@ -65,7 +65,7 @@ Shows the selected agent's `.md` file with Markdown formatting rendered using th
 | **Save Workflow** | Opens a file dialog to save the current workflow |
 | **Execute** | Runs the current workflow in the engine (logs to console) |
 | **Stop** | Signals the engine to stop after the current agent finishes |
-| **Continue** | Enabled after a run stops with a resumable reason. Opens a run-picker dialog (or asks for a log file) and resumes the selected run from its checkpoint |
+ | **Continue** | Enabled after a run stops with a resumable reason. Confirms the auto-selected checkpoint (matching the active run's log) and resumes it |
 | **LoopLog** | Opens the standalone LoopLog viewer for the active run's log |
 
 ## CLI Mode
@@ -78,10 +78,23 @@ python openloop.py --cli --workflow workflows/test_generation.json
 
 ## Continue (resuming interrupted runs)
 
-After a run stops abnormally, the **Continue** button becomes active. Clicking
-it lists the available checkpoints (`openloop-run-*.json`) found in the
-configured log directory, each annotated with its run id and termination
-reason. Picking one resumes that run at its last completed agent boundary.
+After a run stops abnormally, the **Continue** button becomes active. It is
+only enabled when a resumable checkpoint exists for the run's own log, so
+clicking it resumes exactly that run.
+
+A confirmation dialog shows which workflow, log file, and checkpoint will be
+used, along with the run id, termination reason, resume position, and when
+the checkpoint was created. It offers **Continue**, **Abort**, and
+**Select another file…**:
+
+- **Continue** resumes the auto-selected checkpoint (the one next to the
+  active run's log, same name with a `.json` extension).
+- **Abort** cancels.
+- **Select another file…** opens a list of all resumable checkpoints
+  (`openloop-run-*.json`) in the configured log directory, newest first, each
+  annotated with run id, termination reason, phase/iteration, and creation
+  time — useful when something unusual happened and a different run needs to
+  be continued.
 
 Checkpoints whose termination reason is not allowed by the `resume_reasons`
 config filter are excluded from the list (and the Continue button stays
