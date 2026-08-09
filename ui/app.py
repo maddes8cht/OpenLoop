@@ -35,6 +35,8 @@ from tkinter import (
 )
 from typing import Optional
 
+from ui import status as status
+
 
 class CollapsibleFrame(ttk.Frame):
     """A frame with a toggle button that shows/hides its body.
@@ -191,10 +193,16 @@ class WorkflowApp:
         self._cli_log_dir = log_dir
         self._cli_timeout = timeout
         self._resume_checkpoint_path: Optional[Path] = None
+        self._flow_state: str = "idle"
+        self._banner = None
 
         self._build_ui()
         self._root.after_idle(self._init_preview_collapsed)
         self._root.after_idle(lambda l=layout, fs=fullscreen: self._apply_layout(l, fs))
+        # DWM tint calls are dropped before the toplevel is painted; re-apply
+        # the (idle) state once idle and again shortly after the first paint.
+        self._root.after_idle(lambda: self._set_flow_state(self._flow_state))
+        self._root.after(300, lambda: self._set_flow_state(self._flow_state))
         self._load_config()
         self._refresh_agent_list()
         self._poll_log_queue()
@@ -225,11 +233,18 @@ class WorkflowApp:
 
     def _build_ui(self) -> None:
         self._root.columnconfigure(0, weight=1)
-        self._root.rowconfigure(1, weight=1)
+        self._root.rowconfigure(2, weight=1)
+
+        # Flow-status banner: only where the native titlebar cannot carry the
+        # color (non-Windows). On Windows the titlebar is tinted instead.
+        self._banner = None
+        if not status.title_native_color_supported():
+            self._banner = status.create_banner(self._root)
+            self._banner.grid(row=0, column=0, sticky=(W, E))
 
         # ---- Toolbar ----
         toolbar = Frame(self._root)
-        toolbar.grid(row=0, column=0, sticky=(W, E), padx=4, pady=2)
+        toolbar.grid(row=1, column=0, sticky=(W, E), padx=4, pady=2)
         toolbar.columnconfigure(5, weight=1)
 
         Button(toolbar, text="Load Workflow", command=self._load_workflow).pack(
@@ -299,7 +314,7 @@ class WorkflowApp:
         # ---- Main area: 4 columns + Log ----
         self._root_paned = ttk.PanedWindow(self._root, orient=VERTICAL)
         self._root_paned.grid(
-            row=1, column=0, sticky=(N, S, W, E), padx=4, pady=2
+            row=2, column=0, sticky=(N, S, W, E), padx=4, pady=2
         )
         self._log_ratio = None
         self._root_paned.bind("<ButtonRelease-1>", self._on_log_sash_drag)
@@ -877,6 +892,8 @@ class WorkflowApp:
             self._workflow_path = path
             self._workflow_path_var.set(path)
             self._update_title()
+            # A freshly loaded workflow represents a clean slate.
+            self._set_flow_state("idle")
             self._log(f"Loaded workflow: {path}")
         except (json.JSONDecodeError, FileNotFoundError) as exc:
             if self._workflow_path:
@@ -926,7 +943,23 @@ class WorkflowApp:
         title = "OpenLoop — Workflow Builder"
         if wd:
             title += f" — {wd}"
-        self._root.title(title)
+        # The flow-state label prefixes the title in the same style as the
+        # LoopLog viewer so both windows carry the same signal.
+        state_label = status.STATE_LABELS.get(self._flow_state, "IDLE")
+        self._root.title(f"{state_label} — {title}")
+
+    def _set_flow_state(self, state: str, *, sound: bool = False) -> None:
+        """Update the banner/titlebar to a new flow state (idle/running/...)."""
+        if state not in status.FLOW_STATES:
+            state = "error"
+        self._flow_state = state
+        root = getattr(self, "_root", None)
+        if root is not None:
+            status.apply_banner(
+                getattr(self, "_banner", None), root, state,
+                sound=sound,
+            )
+        self._update_title()
 
     def _browse_workdir(self) -> None:
         wd = self._workdir_var.get().strip()
@@ -1080,6 +1113,8 @@ class WorkflowApp:
         )
         self._execution_thread.start()
 
+        self._set_flow_state("running")
+
     def _make_engine(self):
         """Build an ExecutionEngine wired to the GUI log/state callbacks."""
         from core.config import Config
@@ -1189,6 +1224,8 @@ class WorkflowApp:
             daemon=True,
         )
         self._execution_thread.start()
+
+        self._set_flow_state("running")
 
     def _run_resume_engine(self, checkpoint_path) -> None:
         try:
@@ -1548,6 +1585,18 @@ class WorkflowApp:
                     self._resume_checkpoint_path = cp
                     continue_btn.configure(state="normal")
 
+        # Final banner state from the engine's termination state.
+        term_reason = ""
+        is_complete = False
+        engine = getattr(self, "_engine", None)
+        if engine is not None and getattr(engine, "state", None) is not None:
+            term_reason = engine.state.termination_reason or ""
+            is_complete = bool(engine.state.is_complete)
+            final_state = status.state_from_reason(term_reason, is_complete)
+        else:
+            final_state = "idle"
+        self._set_flow_state(final_state, sound=True)
+
     # ---- State Display (Live) ----
 
     def _update_status_bar(self, state: dict) -> None:
@@ -1643,6 +1692,7 @@ class WorkflowApp:
                 self._log_text.see(END)
                 self._log_text.configure(state="disabled")
             elif kind == "state":
+                self._set_flow_state("running")
                 self._update_status_bar(data)
                 self._update_state_tab(data)
             elif kind == "log_path":
@@ -1665,6 +1715,7 @@ class WorkflowApp:
         self._log_text.delete("1.0", END)
         self._log_text.configure(state="disabled")
         self._reset_state_display()
+        self._set_flow_state("idle")
 
     def _toggle_log(self) -> None:
         if self._log_collapsed.get():

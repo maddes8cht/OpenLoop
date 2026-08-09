@@ -4773,6 +4773,7 @@ class TestLoopLogViewer:
             patch.object(looplog.tk, "BooleanVar", side_effect=fake_booleanvar),
             patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
             patch.object(looplog.LoopLogApp, "_load_mru", lambda self: None),
+            patch.object(looplog.status, "create_banner", return_value=MagicMock()),
         ):
             app = object.__new__(looplog.LoopLogApp)
             app.root = looplog.tk.Tk()
@@ -4819,6 +4820,7 @@ class TestLoopLogViewer:
             patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
             patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
             patch.object(looplog.LoopLogApp, "_load_mru", lambda self: None),
+            patch.object(looplog.status, "create_banner", return_value=MagicMock()),
         ):
             app = object.__new__(looplog.LoopLogApp)
             app.root = looplog.tk.Tk()
@@ -4860,6 +4862,7 @@ class TestLoopLogViewer:
             patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
             patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
             patch.object(looplog.LoopLogApp, "_load_mru", lambda self: None),
+            patch.object(looplog.status, "create_banner", return_value=MagicMock()),
         ):
             app = object.__new__(looplog.LoopLogApp)
             app.root = looplog.tk.Tk()
@@ -4904,6 +4907,7 @@ class TestLoopLogViewer:
             patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
             patch.object(looplog.tk, "StringVar", side_effect=fake_stringvar),
             patch.object(looplog.LoopLogApp, "_load_mru", lambda self: None),
+            patch.object(looplog.status, "create_banner", return_value=MagicMock()),
         ):
             app = object.__new__(looplog.LoopLogApp)
             app.root = looplog.tk.Tk()
@@ -5357,3 +5361,391 @@ class TestLoopLogViewer:
         app.load_log(log)
 
         app._record_mru.assert_called_once_with(log)
+
+
+# ===========================================================================
+# ui.status — shared flow-status module
+# ===========================================================================
+
+
+class TestFlowStatusModule:
+    def test_state_model_consistent(self):
+        from ui import status
+
+        assert status.FLOW_STATES[0] == "idle"
+        assert status.TERMINAL_STATES == ("completed", "interrupted", "error")
+        for state in status.FLOW_STATES:
+            assert state in status.STATE_COLORS
+            assert state in status.STATE_LABELS
+
+    def test_state_from_reason_completed(self):
+        from ui import status
+
+        assert status.state_from_reason("") == "completed"
+        assert status.state_from_reason("completed") == "completed"
+        assert status.state_from_reason("stopped", is_complete=True) == "completed"
+
+    def test_state_from_reason_interrupted(self):
+        from ui import status
+
+        assert status.state_from_reason("stopped") == "interrupted"
+        assert status.state_from_reason("max_loops_reached") == "interrupted"
+        assert status.state_from_reason("timeout:amala:600") == "interrupted"
+
+    def test_state_from_reason_error(self):
+        from ui import status
+
+        assert status.state_from_reason("agent_error:amala") == "error"
+        assert status.state_from_reason("missing_state:amala") == "error"
+        assert status.state_from_reason("strange reason") == "error"
+
+    def test_state_from_summary(self):
+        from ui import status
+
+        assert status.state_from_summary("") == "completed"
+        assert status.state_from_summary("run ended fine") == "completed"
+        assert status.state_from_summary("stopped by user") == "interrupted"
+        assert status.state_from_summary("max loops reached") == "interrupted"
+        assert status.state_from_summary("timed out") == "interrupted"
+        assert status.state_from_summary("agent error") == "error"
+        assert status.state_from_summary("no state update") == "error"
+
+    def test_detect_log_state_empty(self):
+        from ui import status
+
+        assert status.detect_log_state([], "") == "idle"
+
+    def test_detect_log_state_still_writing(self):
+        from ui import status
+
+        lines = ["<openloop_log>", "<iteration number=\"1\">"]
+        assert status.detect_log_state(lines, "") == "running"
+
+    def test_detect_log_state_closed_from_summary(self):
+        from ui import status
+
+        assert status.detect_log_state(
+            ["a", "</openloop_log>"], "finished ok"
+        ) == "completed"
+        assert status.detect_log_state(
+            ["a", "</openloop_log>"], "max loops reached"
+        ) == "interrupted"
+        assert status.detect_log_state(
+            ["a", "</openloop_log>"], "agent error"
+        ) == "error"
+
+    def test_title_native_color_supported(self, monkeypatch):
+        from ui import status
+
+        assert isinstance(status.title_native_color_supported(), bool)
+        monkeypatch.setattr(status.os, "name", "nt")
+        assert status.title_native_color_supported() is True
+        monkeypatch.setattr(status.os, "name", "posix")
+        assert status.title_native_color_supported() is False
+
+    def test_apply_banner_holds_steady_color_never_white(self):
+        from ui import status
+
+        banner = MagicMock()
+        status.apply_banner(banner, MagicMock(), "interrupted")
+
+        assert banner.configure.called
+        for call in banner.configure.call_args_list:
+            assert call.kwargs["background"] == status.STATE_COLORS["interrupted"]
+        assert not any(
+            call.kwargs.get("background") == "#ffffff"
+            for call in banner.configure.call_args_list
+        )
+
+
+# ===========================================================================
+# tools.looplog — flow-status banner
+# ===========================================================================
+
+
+class TestLoopLogStatusBanner:
+    _COMPLETE_LOG = (
+        "<openloop_log>\n"
+        "<iteration number=\"1\" max=\"1\">\n"
+        "<agent name=\"amala\" phase=\"loop\" iteration=\"1\" run_id=\"abc\">\n"
+        "<system>\n"
+        "OpenLoop run completed successfully\n"
+        "</system>\n"
+        "</agent>\n"
+        "</iteration>\n"
+        "</openloop_log>\n"
+    )
+    _OPEN_LOG = "<openloop_log>\n<iteration number=\"1\" max=\"1\">\n"
+
+    def test_refresh_status_idle_without_parser(self):
+        from tools import looplog
+
+        app = object.__new__(looplog.LoopLogApp)
+        app._banner = MagicMock()
+        app.root = MagicMock()
+
+        app._refresh_status()
+
+        assert app._flow_state == "idle"
+        app.root.title.assert_called_once_with("IDLE — LoopLog")
+        app._banner.configure.assert_called()
+
+    def test_build_ui_omits_banner_on_native_titlebar(self):
+        from tools import looplog
+
+        captured = {}
+
+        def fake_treeview(parent, **kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        def fake_widget(*args, **kwargs):
+            return MagicMock()
+
+        with (
+            patch.object(looplog.tk, "Tk", return_value=MagicMock()),
+            patch.object(looplog.status, "title_native_color_supported", return_value=True),
+            patch.object(looplog.ttk, "Treeview", side_effect=fake_treeview),
+            patch.object(looplog.tk, "Menu", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Frame", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Label", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Combobox", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Button", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Checkbutton", side_effect=fake_widget),
+            patch.object(looplog.ttk, "PanedWindow", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Scrollbar", side_effect=fake_widget),
+            patch.object(looplog.tk, "Text", side_effect=fake_widget),
+            patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
+            patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
+            patch.object(looplog.LoopLogApp, "_load_mru", lambda self: None),
+            patch.object(looplog.status, "create_banner", return_value=MagicMock()),
+        ):
+            app = object.__new__(looplog.LoopLogApp)
+            app.root = looplog.tk.Tk()
+            app._start_hide_system = False
+            app._start_omit_stderr = False
+            app._start_omit_state = False
+            app._start_omit_state_update = False
+            app._start_show_all = False
+            app._start_wrap_lines = False
+            app._start_filter = "all"
+            app._build_ui()
+
+        assert app._banner is None
+
+    def test_build_ui_creates_banner_without_native_titlebar(self):
+        from tools import looplog
+
+        def fake_treeview(parent, **kwargs):
+            return MagicMock()
+
+        def fake_widget(*args, **kwargs):
+            return MagicMock()
+
+        with (
+            patch.object(looplog.tk, "Tk", return_value=MagicMock()),
+            patch.object(looplog.status, "title_native_color_supported", return_value=False),
+            patch.object(looplog.ttk, "Treeview", side_effect=fake_treeview),
+            patch.object(looplog.tk, "Menu", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Frame", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Label", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Combobox", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Button", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Checkbutton", side_effect=fake_widget),
+            patch.object(looplog.ttk, "PanedWindow", side_effect=fake_widget),
+            patch.object(looplog.ttk, "Scrollbar", side_effect=fake_widget),
+            patch.object(looplog.tk, "Text", side_effect=fake_widget),
+            patch.object(looplog.tk, "BooleanVar", side_effect=fake_widget),
+            patch.object(looplog.tk, "StringVar", side_effect=fake_widget),
+            patch.object(looplog.LoopLogApp, "_load_mru", lambda self: None),
+            patch.object(looplog.status, "create_banner", return_value=MagicMock()),
+        ):
+            app = object.__new__(looplog.LoopLogApp)
+            app.root = looplog.tk.Tk()
+            app._start_hide_system = False
+            app._start_omit_stderr = False
+            app._start_omit_state = False
+            app._start_omit_state_update = False
+            app._start_show_all = False
+            app._start_wrap_lines = False
+            app._start_filter = "all"
+            app._build_ui()
+
+        assert app._banner is not None
+
+    def test_refresh_status_completed_plays_sound(self, tmp_path):
+        from tools import looplog
+
+        log = tmp_path / "closed.log"
+        log.write_text(self._COMPLETE_LOG, encoding="utf-8")
+        app = object.__new__(looplog.LoopLogApp)
+        app._banner = MagicMock()
+        app.root = MagicMock()
+        app.parser = looplog.LogParser(log)
+        app.sections = app.parser.parse()
+
+        with patch("ui.status._play_state_sound") as play:
+            app._refresh_status(sound=True)
+
+        assert app._flow_state == "completed"
+        play.assert_called_once_with("completed")
+        app.root.title.assert_called_once_with("COMPLETED — LoopLog")
+
+    def test_load_log_closed_log_yields_completed(self, tmp_path):
+        from tools import looplog
+        from ui import status
+
+        log = tmp_path / "closed.log"
+        log.write_text(self._COMPLETE_LOG, encoding="utf-8")
+
+        app = object.__new__(looplog.LoopLogApp)
+        app._path = None
+        app._banner = MagicMock()
+        app.root = MagicMock()
+        app._file_label = MagicMock()
+        app._watch = False
+        app._stop_watching = MagicMock()
+        app._start_watching = MagicMock()
+        app._is_log_complete = MagicMock(return_value=True)
+        app._update_filter_options = MagicMock()
+        app._rebuild_tree = MagicMock()
+        app._sec_map = {}
+        app._mru_menu = None
+        app._record_mru = MagicMock()
+
+        app.load_log(log)
+
+        assert app._flow_state == "completed"
+        kwargs = app._banner.configure.call_args.kwargs
+        assert kwargs["background"] == status.STATE_COLORS["completed"]
+
+    def test_load_log_open_log_yields_running(self, tmp_path):
+        from tools import looplog
+
+        log = tmp_path / "open.log"
+        log.write_text(self._OPEN_LOG, encoding="utf-8")
+
+        app = object.__new__(looplog.LoopLogApp)
+        app._path = None
+        app._banner = MagicMock()
+        app.root = MagicMock()
+        app._file_label = MagicMock()
+        app._watch = False
+        app._stop_watching = MagicMock()
+        app._start_watching = MagicMock()
+        app._is_log_complete = MagicMock(return_value=True)
+        app._update_filter_options = MagicMock()
+        app._rebuild_tree = MagicMock()
+        app._sec_map = {}
+        app._mru_menu = None
+        app._record_mru = MagicMock()
+
+        app.load_log(log)
+
+        assert app._flow_state == "running"
+
+
+# ===========================================================================
+# ui.app — GUI flow-status banner
+# ===========================================================================
+
+
+class TestWorkflowAppFlowStatus:
+    def _make_app(self):
+        with (
+            patch("ui.app.Tk"),
+            patch("ui.app.WorkflowApp._build_ui"),
+            patch("ui.app.WorkflowApp._load_config"),
+            patch("ui.app.WorkflowApp._refresh_agent_list"),
+            patch("ui.app.WorkflowApp._poll_log_queue"),
+            patch("ui.app.WorkflowApp._update_title") as title_mock,
+        ):
+            from ui.app import WorkflowApp
+
+            app = WorkflowApp()
+            app._update_title = title_mock  # instance attr keeps it mocked
+            app._banner = MagicMock()
+            app._root = MagicMock()
+            return app
+
+    def test_set_flow_state_running_updates_banner(self):
+        from ui import status
+
+        app = self._make_app()
+
+        app._set_flow_state("running")
+
+        assert app._flow_state == "running"
+        kwargs = app._banner.configure.call_args.kwargs
+        assert kwargs["background"] == status.STATE_COLORS["running"]
+        app._update_title.assert_called()
+
+    def test_set_flow_state_unknown_becomes_error(self):
+        app = self._make_app()
+
+        app._set_flow_state("bogus")
+
+        assert app._flow_state == "error"
+
+    def test_set_flow_state_no_banner_is_safe(self):
+        app = self._make_app()
+        app._banner = None
+
+        app._set_flow_state("running")
+
+        assert app._flow_state == "running"
+
+    def test_execution_done_maps_interrupted(self):
+        app = self._make_app()
+        app._start_btn = MagicMock()
+        app._stop_btn = MagicMock()
+        app._status_dot = MagicMock()
+        engine = MagicMock()
+        engine.state.termination_reason = "max_loops_reached"
+        engine.state.is_complete = False
+        app._engine = engine
+
+        with patch("ui.status._play_state_sound"):
+            app._execution_done()
+
+        assert app._flow_state == "interrupted"
+
+    def test_execution_done_maps_completed(self):
+        app = self._make_app()
+        app._start_btn = MagicMock()
+        app._stop_btn = MagicMock()
+        app._status_dot = MagicMock()
+        engine = MagicMock()
+        engine.state.termination_reason = "completed"
+        engine.state.is_complete = True
+        app._engine = engine
+
+        with patch("ui.status._play_state_sound"):
+            app._execution_done()
+
+        assert app._flow_state == "completed"
+
+    def test_clear_log_resets_to_idle(self):
+        app = self._make_app()
+        app._log_text = MagicMock()
+        app._reset_state_display = MagicMock()
+        app._set_flow_state("running")
+
+        app._clear_log()
+
+        assert app._flow_state == "idle"
+        app._reset_state_display.assert_called_once()
+
+    def test_load_workflow_resets_to_idle(self, tmp_path):
+        app = self._make_app()
+        app._load_workflow_into_ui = MagicMock()
+        app._workflow_path = None
+        app._workflow_path_var = MagicMock()
+        wf = tmp_path / "wf.json"
+        wf.write_text("{}\n", encoding="utf-8")
+
+        app._set_flow_state("running")
+        app._load_workflow_from_path(str(wf))
+
+        assert app._flow_state == "idle"
+        app._load_workflow_into_ui.assert_called_once_with({})
