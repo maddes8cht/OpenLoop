@@ -765,6 +765,38 @@ class ExecutionEngine:
 
     # ---- Workflow execution ----
 
+    def validate_workflow_agents(self, workflow: "WorkflowConfig") -> None:
+        """Fail fast if the workflow references unknown agents.
+
+        Also logs a warning for every agent file that was skipped as a
+        non-agent (missing/malformed frontmatter or ``name``), and surfaces
+        duplicate agent names as a ``ValueError``.
+        """
+        available = self.agent_loader.list_agents()
+
+        for warning in self.agent_loader.warnings:
+            self.log(f"Agent warning: {warning}")
+
+        wanted: list[str] = []
+        for names in (
+            workflow.preparation_agents,
+            workflow.loop_agents,
+            workflow.finalization_agents,
+        ):
+            wanted.extend(names)
+
+        missing = [
+            name for name in dict.fromkeys(wanted) if name not in available
+        ]
+
+        if missing:
+            raise FileNotFoundError(
+                "Workflow references unknown agent(s): "
+                + ", ".join(missing)
+                + f". Available agents under {self.config.agents_dir}: "
+                + (", ".join(available) or "none")
+            )
+
     def execute_workflow(self, workflow_path: str | Path) -> WorkflowState:
         workflow = WorkflowConfig.load(workflow_path)
         return self.execute_workflow_data(workflow.to_dict())
@@ -792,6 +824,12 @@ class ExecutionEngine:
 
         self.log(f"Loaded workflow: {workflow.loop_agents}")
         self.log(f"Run ID: {self._get_run_id()}")
+
+        try:
+            self.validate_workflow_agents(workflow)
+        except Exception:
+            self._close_log()
+            raise
 
         raw_init = workflow.init_script or self.config.init_script
         if raw_init:
@@ -898,6 +936,12 @@ class ExecutionEngine:
 
         self.log(f"Resuming run {self._get_run_id()} from checkpoint")
         self.log(f"  Previous termination: {reason}")
+
+        try:
+            self.validate_workflow_agents(workflow)
+        except Exception:
+            self._close_log()
+            raise
 
         try:
             resume_phase = self._resume_position.get("phase")

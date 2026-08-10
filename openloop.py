@@ -201,6 +201,9 @@ def _run_cli(args: argparse.Namespace, config) -> None:
     except ImportError as exc:
         print(f"Error: Missing core module — {exc}")
         sys.exit(1)
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
 
 
 def _run_gui(args: argparse.Namespace, config) -> None:

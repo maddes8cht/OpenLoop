@@ -36,7 +36,11 @@ python openloop.py
 ## Zones
 
 ### Agent Pool (left column)
-Lists all `.md` files found in the configured `agents_dir`.  
+Lists all agents found **recursively** in the configured `agents_dir`, grouped
+into sections by their top-level subdirectory (agents directly in `agents_dir`
+appear first without a section header). Section headers are tinted and are not
+selectable: arrow-key navigation skips over them, and clicking one leaves the
+current selection untouched.
 Click an agent to preview its content in the Preview pane.
 
 ### Workflow Builder (center column)

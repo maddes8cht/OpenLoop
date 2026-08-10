@@ -965,6 +965,189 @@ class TestAgentLoader:
         agent = AgentLoader._load_file(AgentLoader, path)
         assert agent.system_prompt == ""
 
+    def test_list_agents_finds_nested(self, tmp_path):
+        from core.agent import AgentLoader
+
+        agents_dir = tmp_path / "agents"
+        nested = agents_dir / "setA"
+        nested.mkdir(parents=True)
+        (nested / "amala.md").write_text(
+            "---\nname: amala\nrole: author\n---\nprompt"
+        )
+        (nested / "vera.md").write_text(
+            "---\nname: vera\nrole: auditor\n---\nprompt"
+        )
+        loader = AgentLoader(str(agents_dir))
+        assert loader.list_agents() == ["amala", "vera"]
+
+    def test_get_agent_resolves_by_frontmatter_name(self, tmp_path):
+        from core.agent import AgentLoader
+
+        agents_dir = tmp_path / "agents"
+        sub = agents_dir / "DocsAgents"
+        sub.mkdir(parents=True)
+        path = sub / "01-paperwork.md"
+        path.write_text("---\nname: paperwork\nrole: prep\n---\nprompt")
+        loader = AgentLoader(str(agents_dir))
+        agent = loader.get_agent("paperwork")
+        assert agent.name == "paperwork"
+        assert agent.source_path == path
+
+    def test_duplicate_name_raises(self, tmp_path):
+        from core.agent import AgentLoader
+
+        agents_dir = tmp_path / "agents"
+        a = agents_dir / "setA"
+        b = agents_dir / "setB"
+        a.mkdir(parents=True)
+        b.mkdir(parents=True)
+        (a / "one.md").write_text("---\nname: dup\nrole: r\n---\np1")
+        (b / "two.md").write_text("---\nname: dup\nrole: r\n---\np2")
+        loader = AgentLoader(str(agents_dir))
+        with pytest.raises(ValueError, match="Duplicate agent name 'dup'"):
+            loader.list_agents()
+
+    def test_non_agent_md_skipped_with_warning(self, tmp_path):
+        from core.agent import AgentLoader
+
+        agents_dir = tmp_path / "agents"
+        sub = agents_dir / "DocsAgents"
+        sub.mkdir(parents=True)
+        (sub / "README.md").write_text("notes, not an agent")
+        (agents_dir / "real.md").write_text(
+            "---\nname: real\nrole: r\n---\nprompt"
+        )
+        loader = AgentLoader(str(agents_dir))
+        assert loader.list_agents() == ["real"]
+        assert len(loader.warnings) == 1
+        assert "README.md" in loader.warnings[0]
+
+    def test_source_path_populated(self, tmp_path):
+        from core.agent import AgentLoader
+
+        agents_dir = tmp_path / "agents"
+        sub = agents_dir / "sub"
+        sub.mkdir(parents=True)
+        path = sub / "n.md"
+        path.write_text("---\nname: n\nrole: r\n---\nprompt")
+        loader = AgentLoader(str(agents_dir))
+        agent = loader.get_agent("n")
+        assert agent.source_path == path
+
+    def test_list_agents_by_group(self, tmp_path):
+        from core.agent import AgentLoader
+
+        agents_dir = tmp_path / "agents"
+        (agents_dir / "SetB").mkdir(parents=True)
+        (agents_dir / "SetA").mkdir(parents=True)
+        (agents_dir / "g1.md").write_text("---\nname: root1\nrole: r\n---\np")
+        (agents_dir / "zer.md").write_text("---\nname: root2\nrole: r\n---\np")
+        (agents_dir / "SetA" / "a.md").write_text("---\nname: a\nrole: r\n---\np")
+        (agents_dir / "SetA" / "z.md").write_text("---\nname: z\nrole: r\n---\np")
+        (agents_dir / "SetB" / "b.md").write_text("---\nname: b\nrole: r\n---\np")
+        loader = AgentLoader(str(agents_dir))
+        groups = loader.list_agents_by_group()
+        assert groups[0] == (None, ["root1", "root2"])
+        assert groups[1] == ("SetA", ["a", "z"])
+        assert groups[2] == ("SetB", ["b"])
+
+    def test_list_agents_by_group_flattens_deep_nesting(self, tmp_path):
+        from core.agent import AgentLoader
+
+        agents_dir = tmp_path / "agents"
+        deep = agents_dir / "Top" / "Mid" / "Deep"
+        deep.mkdir(parents=True)
+        (deep / "x.md").write_text("---\nname: x\nrole: r\n---\np")
+        loader = AgentLoader(str(agents_dir))
+        groups = loader.list_agents_by_group()
+        assert groups == [("Top", ["x"])]
+
+
+class TestWorkflowAgentValidation:
+    def _make_engine(self, tmp_path, agents: dict[str, str]):
+        from core.config import Config
+        from core.engine import ExecutionEngine
+
+        agents_dir = tmp_path / "agents"
+        for rel, content in agents.items():
+            p = agents_dir / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+        (tmp_path / "workflows").mkdir(exist_ok=True)
+        cfg = Config(
+            agents_dir=str(agents_dir),
+            workflows_dir=str(tmp_path / "workflows"),
+            log_dir=str(tmp_path / "logs"),
+        )
+        return ExecutionEngine(config=cfg)
+
+    def test_validate_rejects_unknown_agent(self, tmp_path):
+        from core.engine import ExecutionEngine, WorkflowConfig
+
+        engine = self._make_engine(
+            tmp_path, {"known.md": "---\nname: known\nrole: r\n---\np"}
+        )
+        wf = WorkflowConfig.from_dict({"loop_agents": ["known", "ghost"]})
+        with pytest.raises(FileNotFoundError, match="ghost"):
+            engine.validate_workflow_agents(wf)
+
+    def test_validate_surfaces_duplicate_names(self, tmp_path):
+        from core.engine import WorkflowConfig
+
+        engine = self._make_engine(
+            tmp_path,
+            {
+                "a/one.md": "---\nname: dup\nrole: r\n---\np",
+                "b/two.md": "---\nname: dup\nrole: r\n---\np",
+            },
+        )
+        wf = WorkflowConfig.from_dict({"loop_agents": ["dup"]})
+        with pytest.raises(ValueError, match="Duplicate agent name 'dup'"):
+            engine.validate_workflow_agents(wf)
+
+    def test_validate_accepts_known_agents(self, tmp_path):
+        from core.engine import WorkflowConfig
+
+        engine = self._make_engine(
+            tmp_path,
+            {
+                "prep.md": "---\nname: prep\nrole: r\n---\np",
+                "loop.md": "---\nname: loop\nrole: r\n---\np",
+                "fin.md": "---\nname: fin\nrole: r\n---\np",
+            },
+        )
+        wf = WorkflowConfig.from_dict(
+            {
+                "preparation_agents": ["prep"],
+                "loop_agents": ["loop"],
+                "finalization_agents": ["fin"],
+            }
+        )
+        engine.validate_workflow_agents(wf)
+
+    def test_execute_workflow_data_propagates_unknown_agent(self, tmp_path):
+        from core.engine import WorkflowConfig
+
+        engine = self._make_engine(
+            tmp_path, {"known.md": "---\nname: known\nrole: r\n---\np"}
+        )
+        with pytest.raises(FileNotFoundError, match="ghost"):
+            engine.execute_workflow_data({"loop_agents": ["ghost"]})
+
+    def test_validation_failure_closes_log(self, tmp_path):
+        from core.engine import WorkflowConfig
+
+        engine = self._make_engine(
+            tmp_path, {"known.md": "---\nname: known\nrole: r\n---\np"}
+        )
+        with pytest.raises(FileNotFoundError, match="ghost"):
+            engine.execute_workflow_data({"loop_agents": ["ghost"]})
+
+        logs = list((tmp_path / "logs").glob("openloop-run-*.log"))
+        assert logs, "a run log should be written before validation fails"
+        content = logs[0].read_text(encoding="utf-8")
+        assert content.rstrip().endswith("</openloop_log>")
+
 
 # ===========================================================================
 # core.engine — WorkflowConfig & ExecutionEngine
@@ -1578,7 +1761,7 @@ class TestExecutionEngine:
                 return type("R", (), {"success": True, "output": '<state_update>{"is_complete": true}</state_update>', "error": "", "exit_code": 0})()
 
         engine.runner = TrackingRunner()
-        engine.agent_loader = type("L", (), {"get_agent": lambda self, name: type("A", (), {"name": name, "can_complete": True, "role": "auditor", "system_prompt": "You are A."})()})()
+        engine.agent_loader = type("L", (), {"get_agent": lambda self, name: type("A", (), {"name": name, "can_complete": True, "role": "auditor", "system_prompt": "You are A."})(), "list_agents": lambda self: ["a"], "warnings": []})()
 
         engine.config = type("C", (), {
             "opencode_defaults": OpenCodeOptions(model="gpt-4", agent="build"),
@@ -1618,7 +1801,7 @@ class TestExecutionEngine:
                 return type("R", (), {"success": True, "output": '<state_update>{"is_complete": true}</state_update>', "error": "", "exit_code": 0})()
 
         engine.runner = TrackingRunner()
-        engine.agent_loader = type("L", (), {"get_agent": lambda self, name: type("A", (), {"name": name, "can_complete": True, "role": "auditor", "system_prompt": "You are A."})()})()
+        engine.agent_loader = type("L", (), {"get_agent": lambda self, name: type("A", (), {"name": name, "can_complete": True, "role": "auditor", "system_prompt": "You are A."})(), "list_agents": lambda self: ["a"], "warnings": []})()
 
         engine.config = type("C", (), {
             "opencode_defaults": OpenCodeOptions(model="gpt-4", agent="build"),
@@ -2289,7 +2472,7 @@ class TestExecutionEngine:
                     {"success": False, "output": ""},
                 ]
             )
-            engine.agent_loader = self._make_mock_agent_loader({"p1": "P", "p2": "P"})
+            engine.agent_loader = self._make_mock_agent_loader({"p1": "P", "p2": "P", "a": "A"})
             state = engine.execute_workflow_data(
                 {
                     "preparation_agents": ["p1", "p2"],
@@ -2608,6 +2791,8 @@ class TestExecutionEngine:
             return type("A", (), {"name": name, "can_complete": True, "role": "auditor", "system_prompt": prompt})()
 
         loader.get_agent.side_effect = get_agent
+        loader.list_agents.return_value = list(agents)
+        loader.warnings = []
         return loader
 
 

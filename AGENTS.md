@@ -57,7 +57,7 @@ Each agent invocation:
 
 ### Gotchas
 
-- Agent filenames in `agents/` match the name used in workflows (stem of `.md`).
+- Agents are resolved **recursively** under `agents_dir` by their frontmatter `name` (filename is irrelevant for resolution). Duplicate agent names across files are an error; `.md` files without a valid frontmatter `name` are skipped with a warning. Workflows reference agents by that `name` alone.
 - `preparation_agent` / `finalization_agent` (singular, legacy) and `preparation_agents` / `finalization_agents` (plural) are both accepted.
 - `WorkflowState.merge()` does **deep merge** on `payload` (dict.update) but **replaces** top-level fields.
 - `end_state_condition` runs in `{"__builtins__": {}}` — no builtins available.
