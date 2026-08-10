@@ -1,4 +1,4 @@
-___
+---
 name: lessing
 role: preparation
 expected_output_format: state_update

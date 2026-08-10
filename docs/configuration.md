@@ -34,7 +34,7 @@ The config file supports **JSONC** (JSON with Comments) – both `//` line comme
 
 | Field | Type | Default | Description |
 |---|---|---|---|---|
-| `agents_dir` | string | `"./agents"` | Directory containing agent `.md` files |
+| `agents_dir` | string | `"./agents"` | Directory searched recursively for agent `.md` files (frontmatter `name` is the agent identifier) |
 | `workflows_dir` | string | `"./workflows"` | Directory containing workflow `.json` files |
 | `opencode_binary` | string | `"opencode"` | Path or name of the opencode binary |
 | `default_max_loops` | integer | `10` | Default `max_loops` when a workflow does not specify one (must be >= 1) |

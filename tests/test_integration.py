@@ -54,6 +54,8 @@ def _make_mock_agent_loader(agents: dict | None = None):
         return type("A", (), {"name": name, "can_complete": True, "role": "auditor", "system_prompt": prompt})()
 
     loader.get_agent.side_effect = get_agent
+    loader.list_agents.return_value = list(agents)
+    loader.warnings = []
     return loader
 
 
@@ -333,6 +335,8 @@ def _make_resume_agent_loader(agents: dict | None = None):
         return type("A", (), {"name": name, "role": "auditor", "can_complete": True, "system_prompt": prompt})()
 
     loader.get_agent.side_effect = get_agent
+    loader.list_agents.return_value = list(agents)
+    loader.warnings = []
     return loader
 
 
@@ -599,6 +603,17 @@ def test_vera_agent_parses():
     assert vera.name == "vera"
     assert vera.role == "auditor"
     assert "VERA" in vera.system_prompt
+
+
+@pytest.mark.tier3
+def test_docs_agent_resolves_in_subdirectory():
+    from core.agent import AgentLoader
+    loader = AgentLoader(str(ROOT / "agents"))
+    humboldt = loader.get_agent("humboldt")
+    assert humboldt.name == "humboldt"
+    assert humboldt.role == "auditor"
+    assert humboldt.can_complete is True
+    assert humboldt.source_path is not None
 
 
 @pytest.mark.tier3

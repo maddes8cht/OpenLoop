@@ -3,6 +3,14 @@
 Agent definition files use Markdown (`.md`) with YAML frontmatter.  
 They are stored in `agents/` (configurable via `agents_dir` in `openloop.json`).
 
+Agents may be organized into subdirectories by theme (e.g. `agents/TestAgents/`,
+`agents/DocsAgents/`). Discovery is **recursive**: every `.md` file below
+`agents_dir` is scanned. `.md` files without a valid frontmatter `name` (e.g.
+a `README.md`) are skipped with a warning. Two files resolving to the same
+`name` are an **error** — agent names must be unique across all subdirectories.
+The filename is irrelevant for resolution; the frontmatter `name` is the
+identifier used in workflows.
+
 ## File Format
 
 ```markdown
@@ -22,7 +30,7 @@ You are AMALA, a meticulous test author...
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `name` | Yes | — | Agent identifier used in workflow slots |
+| `name` | Yes | — | Agent identifier used in workflow slots. Must be unique across all subdirectories of `agents_dir`. |
 | `role` | No | `""` | Short role description (e.g. `author`, `auditor`) |
 | `can_complete` | No | `false` | Whether this agent may set `is_complete=true`. If `false`, `is_complete=true` is forced to `false` and a warning is logged. Truthy values: `"1"`, `"true"`, `"yes"`, `"on"`. |
 | `expected_output_format` | No | `json_block` | Hint for expected output format (`json_block` or `xml_tag`) |

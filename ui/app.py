@@ -346,7 +346,9 @@ class WorkflowApp:
         pool_frame.columnconfigure(0, weight=1)
         pool_frame.rowconfigure(0, weight=1)
 
-        self._agent_listbox = Listbox(pool_frame, width=22)
+        self._agent_listbox = Listbox(
+            pool_frame, width=22, activestyle="none"
+        )
         self._agent_listbox.grid(row=0, column=0, sticky=(N, S, W, E), pady=2)
         agent_scroll = Scrollbar(
             pool_frame, command=self._agent_listbox.yview
@@ -357,6 +359,9 @@ class WorkflowApp:
             "<<ListboxSelect>>",
             lambda e: self._show_preview(self._agent_listbox),
         )
+        self._agent_listbox.bind("<Up>", self._on_pool_arrow)
+        self._agent_listbox.bind("<Down>", self._on_pool_arrow)
+        self._agent_listbox.bind("<Button-1>", self._on_pool_mouse)
 
         agent_btn_frame = Frame(pool_frame)
         agent_btn_frame.grid(row=1, column=0, columnspan=2, pady=2)
@@ -709,16 +714,74 @@ class WorkflowApp:
 
     def _refresh_agent_list(self) -> None:
         self._agent_listbox.delete(0, END)
+        # Parallel pool index: one entry per listbox row, either
+        # ("agent", name) or ("header", section name).
+        self._pool_items: list[tuple[str, str]] = []
         if self._config is None:
             return
         try:
             from core.agent import AgentLoader
 
             loader = AgentLoader(self._config.agents_dir)
-            for name in loader.list_agents():
-                self._agent_listbox.insert(END, name)
+            for group, names in loader.list_agents_by_group():
+                if group is None:
+                    for name in names:
+                        self._pool_insert(name)
+                else:
+                    self._pool_insert(group, header=True)
+                    for name in names:
+                        self._pool_insert(name)
         except ImportError:
             pass
+        except ValueError as exc:
+            messagebox.showerror("Duplicate Agent Name", str(exc))
+
+    def _pool_insert(self, label: str, *, header: bool = False) -> None:
+        index = self._agent_listbox.size()
+        self._pool_items.append(("header" if header else "agent", label))
+        self._agent_listbox.insert(END, label)
+        if header:
+            self._agent_listbox.itemconfig(
+                index, fg="#6b6b6b", bg="#e7e7e7"
+            )
+
+    def _pool_row(self, index: int) -> tuple[str, str] | None:
+        items = getattr(self, "_pool_items", None)
+        if items is None:
+            return None
+        if 0 <= index < len(items):
+            return items[index]
+        return None
+
+    def _on_pool_arrow(self, event) -> str:
+        """Arrow-key navigation that skips section headers."""
+        lb = self._agent_listbox
+        cur = lb.curselection()
+        base = cur[0] if cur else -1
+        step = 1 if event.keysym == "Down" else -1
+        nxt = base + step
+        while 0 <= nxt < lb.size():
+            row = self._pool_row(nxt)
+            if row is None or row[0] == "agent":
+                break
+            nxt += step
+        if 0 <= nxt < lb.size():
+            lb.selection_clear(0, END)
+            lb.selection_set(nxt)
+            lb.activate(nxt)
+            lb.see(nxt)
+            self._show_preview(lb)
+        return "break"
+
+    def _on_pool_mouse(self, event) -> str | None:
+        """Mouse clicks on section headers leave the selection untouched."""
+        lb = self._agent_listbox
+        index = lb.nearest(event.y)
+        if 0 <= index < lb.size():
+            row = self._pool_row(index)
+            if row is not None and row[0] == "header":
+                return "break"
+        return None
 
     def _show_preview(self, source: Listbox) -> None:
         for lb in [
@@ -738,27 +801,51 @@ class WorkflowApp:
             self._preview_text.configure(state="disabled")
             return
 
-        name = source.get(sel[0])
+        if source is self._agent_listbox:
+            row = self._pool_row(sel[0])
+            if row is None or row[0] == "header":
+                return
+            name = row[1]
+        else:
+            name = source.get(sel[0])
+
         if self._config is None:
             return
-        agent_path = Path(self._config.agents_dir) / f"{name}.md"
-        if not agent_path.exists():
+
+        try:
+            from core.agent import AgentLoader
+
+            agent = AgentLoader(self._config.agents_dir).get_agent(name)
+        except (ImportError, FileNotFoundError, ValueError) as exc:
             self._preview_text.configure(state="normal")
             self._preview_text.delete("1.0", END)
-            self._preview_text.insert("1.0", f"File not found: {agent_path}")
+            self._preview_text.insert("1.0", f"Agent unavailable: {exc}")
+            self._preview_text.configure(state="disabled")
+            return
+
+        if agent.source_path is None or not agent.source_path.exists():
+            self._preview_text.configure(state="normal")
+            self._preview_text.delete("1.0", END)
+            self._preview_text.insert(
+                "1.0",
+                f"File not found: {agent.source_path}",
+            )
             self._preview_text.configure(state="disabled")
             return
 
         from core.markdown_renderer import render as md_render
 
-        content = agent_path.read_text(encoding="utf-8")
+        content = agent.source_path.read_text(encoding="utf-8")
         md_render(self._preview_text, content)
 
     def _add_to_zone(self, zone: str) -> None:
         sel = self._agent_listbox.curselection()
         if not sel:
             return
-        name = self._agent_listbox.get(sel[0])
+        row = self._pool_row(sel[0])
+        if row is None or row[0] == "header":
+            return
+        name = row[1]
         listbox = getattr(self, f"_{zone}_listbox")
         listbox.insert(END, name)
 
@@ -1082,6 +1169,18 @@ class WorkflowApp:
             self._engine = self._make_engine()
         except ImportError as exc:
             messagebox.showerror("Error", f"Missing core module: {exc}")
+            return
+
+        # Pre-flight: fail fast if the workflow references unknown or
+        # duplicate agents (runs on the main thread, Tkinter-safe).
+        try:
+            from core.engine import WorkflowConfig
+
+            self._engine.validate_workflow_agents(
+                WorkflowConfig.from_dict(data)
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            messagebox.showerror("Cannot start run", str(exc))
             return
 
         # Auto-clear execution log and state display for a fresh start

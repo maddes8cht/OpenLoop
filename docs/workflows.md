@@ -27,6 +27,11 @@ Workflow definitions are JSON files stored in `workflows/` (configurable via `wo
 | `preparation_agents` | string / array of strings | `[]` | Agent(s) run once before the loop. Accepts single string or list. Also accepts legacy key `preparation_agent`. |
 | `loop_agents` | array of strings | `[]` | Agent(s) executed in sequence each iteration |
 | `finalization_agents` | string / array of strings | `[]` | Agent(s) run once after the loop. Accepts single string or list. Also accepts legacy key `finalization_agent`. |
+
+> **Note:** Agent slots reference the agents' frontmatter `name`, which must be
+> unique across all subdirectories of `agents_dir`. Before a run starts, every
+> referenced agent is resolved; unknown or duplicate names abort the run with a
+> clear error.
 | `end_state_condition` | string | `"is_complete == True"` | Python expression evaluated after each agent to decide loop termination |
 | `max_loops` | integer | `10` | Hard limit on loop iterations |
 | `finalize_on_abort` | boolean | `false` | If `true`, finalization runs even when `max_loops` is reached |
